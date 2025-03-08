@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import random
 import math
 
-# 1. Adjust input resolution for better balance between speed and detail
+# Adjust input resolution for better balance between speed and detail
 img_size = 16  # Increased from 14 to 16
 
 # Data loading and preprocessing
@@ -17,7 +17,7 @@ transform = transforms.Compose([
     transforms.Normalize((0.5,), (0.5,))
 ])
 
-# 6. Optimize batch size and load Fashion MNIST instead of MNIST
+# Optimize batch size and load Fashion MNIST instead of MNIST
 batch_size = 128  # Adjusted for better training stability
 train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, transform=transform)
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, pin_memory=True)
@@ -44,7 +44,7 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:x.size(1), :]
 
 
-# 5. Implement efficient attention mechanism (Linear Attention)
+# Implement efficient attention mechanism (Linear Attention)
 class LinearAttention(nn.Module):
     def __init__(self, dim, heads=4, dim_head=32, dropout=0.1):
         super().__init__()
@@ -78,7 +78,7 @@ class LinearAttention(nn.Module):
         return self.dropout(self.to_out(out))
 
 
-# 2. Decrease model complexity with smaller transformer block
+# Decrease model complexity with smaller transformer block
 class EfficientTransformerBlock(nn.Module):
     def __init__(self, embed_dim, num_heads, ff_dim, dropout=0.1):
         super(EfficientTransformerBlock, self).__init__()
@@ -106,7 +106,7 @@ class EfficientTransformerBlock(nn.Module):
         return x
 
 
-# 4. Implement patch-based approach similar to ViT
+# Implement patch-based approach similar to ViT
 class PatchEmbedding(nn.Module):
     def __init__(self, img_size, patch_size, in_channels=1, embed_dim=128):
         super().__init__()
@@ -146,7 +146,7 @@ class EfficientTransformerDenoiser(nn.Module):
         # Class token
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
 
-        # 2. Reduced complexity - fewer layers, smaller embedding dim
+        # Reduced complexity - fewer layers, smaller embedding dim
         self.transformer_blocks = nn.ModuleList([
             EfficientTransformerBlock(embed_dim, num_heads, ff_dim) for _ in range(num_layers)
         ])
@@ -205,12 +205,12 @@ if __name__ == '__main__':
                           "mps" if torch.backends.mps.is_available() else "cpu")
     print(f"Current using device: {device}")
 
-    # 2. Decreased model complexity
+    # Decreased model complexity
     model = EfficientTransformerDenoiser(img_size=img_size).to(device)
     optimizer = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.05)  # Adjusted for better convergence
     criterion = nn.MSELoss()
 
-    # 6. Improved learning rate scheduler
+    # Improved learning rate scheduler
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
         T_0=5,  # Restart every 5 epochs
