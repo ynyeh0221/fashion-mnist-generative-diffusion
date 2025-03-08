@@ -8,7 +8,7 @@ import random
 import math
 
 # Adjust input resolution for better balance between speed and detail
-img_size = 16  # Increased from 14 to 16
+img_size = 16
 
 # Data loading and preprocessing
 transform = transforms.Compose([
