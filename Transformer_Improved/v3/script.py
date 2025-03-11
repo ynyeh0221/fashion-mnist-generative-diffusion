@@ -240,7 +240,32 @@ if __name__ == '__main__':
             optimizer.zero_grad()
             outputs = model(noisy_images, noise_level, labels)
             labels = labels[:, None, None, None].expand_as(outputs)  # Expand labels to match outputs
-            loss = (0.99 * mse_loss(outputs, images)) + (0.01 * l1_loss(outputs, labels))
+            # Current approach with scaling adjustment
+            # Define these at the beginning of your script, before the training loop
+            mse_scale = None
+            l1_scale = None
+
+            # Then inside your training loop, modify your loss calculation:
+            # Calculate losses
+            mse = mse_loss(outputs, images)
+            l1 = l1_loss(outputs, images)
+
+            # Initialize or update the scaling factors
+            if mse_scale is None:
+                # First batch
+                mse_scale = mse.item()
+                l1_scale = l1.item()
+            else:
+                # Smooth update (use a small factor to avoid rapid changes)
+                mse_scale = 0.99 * mse_scale + 0.01 * mse.item()
+                l1_scale = 0.99 * l1_scale + 0.01 * l1.item()
+
+            # Scale factor to make L1 comparable to MSE
+            scale_factor = mse_scale / l1_scale
+
+            # Dynamic weighting with scaling
+            mse_weight = 0.9 - 0.4 * (epoch / epochs)  # Gradually decrease MSE weight
+            loss = (mse_weight * mse) + ((1 - mse_weight) * l1 * scale_factor)
             loss.backward()
 
             # Gradient clipping for stability
