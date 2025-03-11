@@ -240,7 +240,7 @@ if __name__ == '__main__':
             optimizer.zero_grad()
             outputs = model(noisy_images, noise_level, labels)
             labels = labels[:, None, None, None].expand_as(outputs)  # Expand labels to match outputs
-            loss = (0.8 * mse_loss(outputs, images)) + (0.2 * l1_loss(outputs, labels))
+            loss = (0.95 * mse_loss(outputs, images)) + (0.05 * l1_loss(outputs, labels))
             loss.backward()
 
             # Gradient clipping for stability
