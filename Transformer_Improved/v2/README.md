@@ -86,3 +86,5 @@ The script generates a visualization showing the progressive denoising process f
 4. Employed efficient attention mechanism (Linear Attention)
 5. Optimized batch size for better training stability
 6. Improved learning rate scheduler with cosine annealing warm restarts
+
+![](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/Transformer_Improved/v2/output/myplot.png)
