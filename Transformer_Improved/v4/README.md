@@ -59,7 +59,7 @@ You can modify the following parameters in the script:
 The implementation features:
 - U-Net based encoder-decoder architecture
 - Patch convolutions for efficient processing
-- Self-attention mechanism for enhanced generation quality
+- Linear-attention mechanism for enhanced generation quality
 - Time step and class conditional embeddings
 - Residual connections and batch normalization
 
