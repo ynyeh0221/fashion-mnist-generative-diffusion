@@ -1,4 +1,4 @@
-# Fashion-MNIST Diffusion Model Implementation
+# (WIP) Fashion-MNIST Diffusion Model Implementation
 
 This project implements a PyTorch-based diffusion model for generating Fashion-MNIST style clothing images. The model uses a U-Net architecture combined with time embeddings and class conditioning to enhance generation quality.
 
