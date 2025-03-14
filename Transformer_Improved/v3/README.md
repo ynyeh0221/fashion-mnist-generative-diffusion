@@ -96,3 +96,5 @@ The model includes functionality to visualize the generation process, showing th
 ## Output Example
 
 The model generates a visualization showing the step-by-step denoising process for each fashion category, saved as `fashion_mnist_generation.png`.
+
+![](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/Transformer_Improved/v3/output/myplot.png)
