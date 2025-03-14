@@ -394,32 +394,42 @@ class FashionMNISTUNetDenoiser(nn.Module):
         """
         # Store original dimensions for ensuring output size matches input
         orig_height, orig_width = x.shape[2], x.shape[3]
-
-        # Process noise level - handle different formats
         batch_size = x.shape[0]
 
-        # Handle different noise_level formats
-        if noise_level.dim() == 0 or (noise_level.dim() == 1 and noise_level.size(0) == 1):
-            # It's a scalar or single-element tensor, expand to batch size
-            noise_level = noise_level.view(1).expand(batch_size)
-        elif noise_level.dim() == 1 and noise_level.size(0) == batch_size:
-            # Already batch-sized but needs reshaping
-            pass
-        elif noise_level.dim() >= 2:
-            # Flatten multi-dimensional tensor
-            noise_level = noise_level.view(-1)
-            if len(noise_level) == 1:
-                noise_level = noise_level.expand(batch_size)
-            elif len(noise_level) == batch_size:
+        # Simplified noise level processing
+        # Convert noise level to tensor with shape [batch_size, 1]
+        if isinstance(noise_level, (int, float)):
+            # If scalar, convert to tensor and expand to batch size
+            noise_level = torch.tensor([noise_level], device=x.device).expand(batch_size, 1)
+        else:
+            # Ensure it's a tensor
+            if not isinstance(noise_level, torch.Tensor):
+                noise_level = torch.tensor(noise_level, device=x.device)
+
+            # Process based on tensor dimensions
+            if noise_level.dim() == 0:  # Scalar tensor
+                noise_level = noise_level.view(1, 1).expand(batch_size, 1)
+            elif noise_level.dim() == 1:  # 1D tensor
+                if noise_level.size(0) == 1:
+                    noise_level = noise_level.view(1, 1).expand(batch_size, 1)
+                elif noise_level.size(0) == batch_size:
+                    noise_level = noise_level.view(batch_size, 1)
+                else:
+                    raise ValueError(f"Noise level length {noise_level.size(0)} does not match batch size {batch_size}")
+            elif noise_level.dim() == 2 and noise_level.shape == (batch_size, 1):
+                # Already in the correct shape [batch_size, 1]
                 pass
             else:
-                raise ValueError(f"Noise level shape {noise_level.shape} cannot be matched to batch size {batch_size}")
+                raise ValueError(
+                    f"Noise level should be a scalar, 1D tensor, or shape [batch_size, 1], got shape {noise_level.shape}")
 
-        # Ensure final shape is [batch_size, 1]
-        noise_level = noise_level.view(batch_size, 1)
+        # Ensure noise level is on the correct device
+        noise_level = noise_level.to(x.device)
+
+        # Process time embedding
         t_emb = self.time_mlp(noise_level)
 
-        # Process class label
+        # Process class label embedding
         c_emb = self.class_embedding(labels)
 
         # Combine time and class embeddings
@@ -456,8 +466,8 @@ class FashionMNISTUNetDenoiser(nn.Module):
         if output.shape[2] != orig_height or output.shape[3] != orig_width:
             output = F.interpolate(output, size=(orig_height, orig_width), mode='bilinear', align_corners=True)
 
-        # Return predicted noise directly without the refinement step
-        return output  # This now returns noise prediction, not denoised image
+        # Return predicted noise
+        return output
 
     def get_attention_maps(self):
         """
@@ -692,6 +702,9 @@ if __name__ == '__main__':
         model.train() # Back to train mode
 
 
+    best_loss = float('inf')
+    best_epoch = 0
+
     # Main training loop
     for epoch in range(epochs):
         total_loss = 0
@@ -742,13 +755,23 @@ if __name__ == '__main__':
         print(f'Epoch [{epoch + 1}/{epochs}], Loss: {avg_loss:.4f}, '
               f'LR: {optimizer.param_groups[0]["lr"]:.6f}')
 
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            best_epoch = epoch + 1
+            torch.save({
+                'epoch': epoch + 1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.param_groups[0],
+                'loss': best_loss,
+            }, 'fashion_mnist_diffusion_best_model.pt')
+            print(f'New best model saved at epoch {epoch + 1} with loss {best_loss:.4f}')
+
+        if (epoch + 1) % 10 == 0:
+            torch.save(model.state_dict(), f'fashion_mnist_diffusion_epoch_{epoch + 1}.pt')
+
         # Generate and save visualizations after each epoch
         if (epoch + 1) % 1 == 0:  # Generate visualizations every epoch
             generate_visualizations(epoch)
-
-        # Save model checkpoint every 10 epochs
-        if (epoch + 1) % 10 == 0:
-            torch.save(model.state_dict(), f'fashion_mnist_diffusion_epoch_{epoch + 1}.pt')
 
     # Plot training loss
     plt.figure(figsize=(10, 5))
@@ -767,6 +790,7 @@ if __name__ == '__main__':
 
     # Create a visualization comparing epochs
     # (Moved outside any function, proper indentation level)
+    model.eval()
     with torch.no_grad():
         # Generate a large grid of final samples across all Fashion MNIST classes
         num_samples = 8
