@@ -657,13 +657,61 @@ def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diff
     ema_decay = 0.995
     ema_denoiser = copy.deepcopy(denoiser)  # Create a deep copy for EMA
 
-    # Define weighted MSE loss function
-    def weighted_mse_loss(pred, target, noise_level):
-        """Weight loss more heavily for lower noise levels (end of diffusion process)"""
+    # Define loss function
+    def hybrid_loss(pred, target, noise_level):
+        """
+        Combines MSE loss and cosine similarity loss with proper scaling.
+        Both components are normalized to be on similar scales before combining.
+        """
+        # Reshape weights for proper broadcasting
         weights = 1.0 / (1.0 + noise_level * 10.0)  # More weight to low-noise steps
         weights = weights.view(-1, 1, 1, 1)  # Reshape to [batch_size, 1, 1, 1]
 
-        return torch.mean(weights * ((pred - target) ** 2))
+        # MSE component
+        squared_error = (pred - target) ** 2
+        weighted_squared_error = weights * squared_error
+        mse_loss = torch.mean(weighted_squared_error)
+
+        # Process each sample in the batch individually for cosine similarity
+        batch_size = pred.shape[0]
+        cos_loss_sum = 0.0
+
+        # Flatten and compute cosine similarity per sample
+        for i in range(batch_size):
+            p = pred[i].view(-1)  # Flatten to 1D
+            t = target[i].view(-1)  # Flatten to 1D
+
+            # Skip samples with all zeros to avoid NaN
+            if torch.all(torch.abs(p) < 1e-6) or torch.all(torch.abs(t) < 1e-6):
+                cos_sim = 1.0  # No loss for zero vectors
+            else:
+                # Compute cosine similarity (-1 to 1)
+                cos_sim = F.cosine_similarity(p.unsqueeze(0), t.unsqueeze(0))
+
+            # Convert to loss (0 to 2) and weight by noise level
+            sample_cos_loss = weights[i].item() * (1.0 - cos_sim)
+            cos_loss_sum += sample_cos_loss
+
+        cos_loss = cos_loss_sum / batch_size
+
+        # Scale the cosine loss to be roughly in the same range as MSE
+        # Adaptive scaling based on current MSE value
+        mse_scale = max(1.0, mse_loss.item())
+        scaled_cos_loss = cos_loss / mse_scale
+
+        # Balance the two loss components
+        lambda_mse = 0.85  # Weight for MSE (can be adjusted)
+        lambda_cos = 0.15  # Weight for cosine loss
+
+        # Combine losses
+        total_loss = lambda_mse * mse_loss + lambda_cos * scaled_cos_loss
+
+        # Log the components if needed for debugging
+        if torch.rand(1).item() < 0.01:  # Log occasionally (1% of batches)
+            print(f"MSE: {mse_loss.item():.6f}, Cos: {cos_loss.item():.6f}, "
+                  f"Scaled Cos: {scaled_cos_loss.item():.6f}, Total: {total_loss.item():.6f}")
+
+        return total_loss
 
     # Training parameters
     max_steps = num_epochs * len(train_loader)
@@ -741,7 +789,7 @@ def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diff
                     print(f"Target noise: mean={target_mean:.4f}, std={target_std:.4f}")
 
             # Apply weighted loss based on noise level
-            loss = weighted_mse_loss(predicted_noise, target_noise, noise_level)
+            loss = hybrid_loss(predicted_noise, target_noise, noise_level)
 
             if torch.isnan(loss).any() or torch.isinf(loss).any():
                 print(f"Warning: NaN loss at epoch {epoch}, step {step}")
