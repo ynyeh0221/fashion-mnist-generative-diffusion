@@ -9,7 +9,6 @@ import torch.nn.functional as F
 import os
 import numpy as np
 import copy
-from itertools import islice
 
 # Set image size for Fashion MNIST (28x28 grayscale images)
 img_size = 28
@@ -21,7 +20,7 @@ transform = transforms.Compose([
 ])
 
 # Load Fashion MNIST dataset
-batch_size = 256  # Increased for more stable gradients
+batch_size = 128  # Increased for more stable gradients
 train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, transform=transform)
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
 
@@ -642,7 +641,7 @@ def train_vae(vae, num_epochs=50, lr=0.0001):
 
 
 # Modified train_latent_diffusion function
-def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diffusion_steps=20):
+def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diffusion_steps=30):
     print("Starting latent diffusion model training...")
 
     # Freeze VAE parameters
@@ -700,8 +699,8 @@ def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diff
         scaled_cos_loss = cos_loss / mse_scale
 
         # Balance the two loss components
-        lambda_mse = 0.85  # Weight for MSE (can be adjusted)
-        lambda_cos = 0.15  # Weight for cosine loss
+        lambda_mse = 0.99  # Weight for MSE (can be adjusted)
+        lambda_cos = 0.01  # Weight for cosine loss
 
         # Combine losses
         total_loss = lambda_mse * mse_loss + lambda_cos * scaled_cos_loss
@@ -845,6 +844,14 @@ def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diff
             orig_state_dict = copy.deepcopy(denoiser.state_dict())
             denoiser.load_state_dict(ema_denoiser.state_dict())
             generate_latent_diffusion_samples(latent_model, epoch, num_diffusion_steps, alphas_cumprod, betas)
+            for class_idx in range(10):
+                visualize_denoising_progression(
+                    latent_model,
+                    num_diffusion_steps,
+                    alphas_cumprod,
+                    betas,
+                    class_idx=class_idx
+                )
             # Swap back
             denoiser.load_state_dict(orig_state_dict)
 
@@ -922,6 +929,106 @@ def visualize_vae_reconstruction(vae, epoch):
         plt.close()
     vae.train()
 
+
+# Add this function to visualize the denoising progression
+def visualize_denoising_progression(latent_model, num_diffusion_steps, alphas_cumprod, betas, class_idx=0):
+    vae = latent_model.vae
+    denoiser = latent_model.denoiser
+    latent_spatial_size = 16
+
+    vae.eval()
+    denoiser.eval()
+
+    # DDIM sampling parameters
+    num_sampling_steps = 10  # We'll visualize 10 steps
+    skip = num_diffusion_steps // num_sampling_steps
+    timesteps = list(range(0, num_diffusion_steps, skip))
+    timesteps.reverse()  # Reversed order from T to 0
+
+    with torch.no_grad():
+        # Create figure with enough space for all steps plus original and final
+        fig, axes = plt.subplots(1, num_sampling_steps + 2, figsize=(24, 4))
+
+        # Sample a latent vector from standard normal distribution
+        z = torch.randn((1, latent_model.latent_dim, latent_spatial_size, latent_spatial_size)).to(device)
+        z = torch.clamp(z, -4.0, 4.0)  # Initial clamping
+
+        # Set the class label
+        label = torch.tensor([class_idx], device=device)
+
+        # Save the initial noisy latent
+        initial_z = z.clone()
+
+        # Display the initial noisy image
+        z_flat = F.adaptive_avg_pool2d(initial_z, (1, 1)).squeeze(-1).squeeze(-1)
+        initial_img = vae.decode(z_flat)
+        initial_img = initial_img.cpu().permute(0, 2, 3, 1).squeeze().numpy()
+        axes[0].imshow(initial_img, cmap='gray', vmin=0, vmax=1)
+        axes[0].set_title(f"Noise t={timesteps[0]}")
+        axes[0].axis('off')
+
+        # Track progression of denoising
+        for i, t_current in enumerate(timesteps[:-1]):
+            t_next = timesteps[i + 1] if i + 1 < len(timesteps) else 0
+
+            # Current timestep noise level
+            noise_level = (1 - torch.cos(torch.tensor([t_current], device=device) /
+                                         num_diffusion_steps * math.pi / 2)).view(-1, 1)
+
+            # Predict noise
+            noise_pred = denoiser(z, noise_level, label)
+            noise_pred = torch.clamp(noise_pred, -5.0, 5.0)
+
+            # Get current x0 prediction
+            alpha_current = alphas_cumprod[t_current].clamp(min=1e-5)
+            alpha_current_sqrt = torch.sqrt(alpha_current)
+            sigma_current = torch.sqrt((1 - alpha_current).clamp(min=0))
+
+            # Current predicted x0
+            x0_pred = (z - sigma_current * noise_pred) / alpha_current_sqrt
+            x0_pred = torch.clamp(x0_pred, -10.0, 10.0)
+
+            if t_next > 0:
+                # DDIM update formula for next noisy sample
+                alpha_next = alphas_cumprod[t_next].clamp(min=1e-5)
+                alpha_next_sqrt = torch.sqrt(alpha_next)
+
+                # Simplified DDIM deterministic update (eta=0)
+                z = alpha_next_sqrt * x0_pred + torch.sqrt(1 - alpha_next) * noise_pred
+            else:
+                # Last step - use predicted x0 directly
+                z = x0_pred
+
+            # Safety clamp after update
+            z = torch.clamp(z, -20.0, 20.0)
+
+            # Decode and visualize the current state
+            z_flat = F.adaptive_avg_pool2d(z, (1, 1)).squeeze(-1).squeeze(-1)
+            img = vae.decode(z_flat)
+            img = img.cpu().permute(0, 2, 3, 1).squeeze().numpy()
+
+            # Replace any NaNs in the image
+            if np.isnan(img).any():
+                img = np.nan_to_num(img, nan=0.5)
+
+            # Display image
+            axes[i + 1].imshow(img, cmap='gray', vmin=0, vmax=1)
+            axes[i + 1].set_title(f"t={t_next}")
+            axes[i + 1].axis('off')
+
+        # Display final denoised image
+        axes[-1].imshow(img, cmap='gray', vmin=0, vmax=1)
+        axes[-1].set_title(f"Final ({class_names[class_idx]})")
+        axes[-1].axis('off')
+
+        plt.tight_layout()
+        output_dir = 'epoch_visualizations_latent_denoising'
+        os.makedirs(output_dir, exist_ok=True)
+        plt.savefig(os.path.join(output_dir, f'latent_diffusion_denoising_progression_class_{class_idx}.png', dpi=200))
+        plt.close()
+
+    vae.train()
+    denoiser.train()
 
 # Modified latent diffusion model sampling visualization with DDIM
 def generate_latent_diffusion_samples(latent_model, epoch, num_diffusion_steps, alphas_cumprod, betas):
