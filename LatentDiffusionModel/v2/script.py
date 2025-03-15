@@ -37,13 +37,13 @@ class VAE(nn.Module):
         # Simpler encoder - fewer layers, no residual connections
         self.encoder = nn.Sequential(
             nn.Conv2d(in_channels, 32, 3, stride=1, padding=1),
-            nn.BatchNorm2d(32),
+            nn.GroupNorm(num_groups=4, num_channels=32),
             nn.LeakyReLU(0.2),
             nn.Conv2d(32, 64, 4, stride=2, padding=1),  # 28x28 -> 14x14
-            nn.BatchNorm2d(64),
+            nn.GroupNorm(num_groups=8, num_channels=64),
             nn.LeakyReLU(0.2),
             nn.Conv2d(64, 128, 4, stride=2, padding=1),  # 14x14 -> 7x7
-            nn.BatchNorm2d(128),
+            nn.GroupNorm(num_groups=16, num_channels=128),
             nn.LeakyReLU(0.2),
         )
 
@@ -60,10 +60,10 @@ class VAE(nn.Module):
         # Simpler decoder
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(128, 64, 4, stride=2, padding=1),  # 7x7 -> 14x14
-            nn.BatchNorm2d(64),
+            nn.GroupNorm(num_groups=8, num_channels=64),
             nn.LeakyReLU(0.2),
             nn.ConvTranspose2d(64, 32, 4, stride=2, padding=1),  # 14x14 -> 28x28
-            nn.BatchNorm2d(32),
+            nn.GroupNorm(num_groups=4, num_channels=32),
             nn.LeakyReLU(0.2),
             nn.Conv2d(32, in_channels, 3, padding=1),
             nn.Sigmoid()  # Enforce output range [0,1] for stability
@@ -548,12 +548,18 @@ def train_vae(vae, num_epochs=50, lr=0.0001):
         else:
             return 0.001  # Fixed small weight after warmup
 
-    # FIXED: Using MSE loss which is guaranteed to be positive
+    # Using MSE loss which is guaranteed to be positive
     def reconstruction_loss(recon_x, x):
         """
-        Simple MSE loss that's guaranteed to be positive
+        Using squared Euclidean distance (sum of squared differences)
+        instead of MSE (mean of squared differences) to avoid small loss values
         """
-        return F.mse_loss(recon_x, x, reduction='mean')
+        # Calculate squared differences
+        squared_diff = (recon_x - x) ** 2
+
+        # Sum all elements instead of taking the mean
+        # This avoids division by width × height × channels
+        return torch.sum(squared_diff)
 
     # KL divergence with proper reduction
     def kl_divergence(mu, log_var, kl_weight):
@@ -659,17 +665,19 @@ def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diff
     # Define loss function
     def hybrid_loss(pred, target, noise_level):
         """
-        Combines MSE loss and cosine similarity loss with proper scaling.
-        Both components are normalized to be on similar scales before combining.
+        Modified hybrid loss using squared Euclidean distance instead of MSE
+        to prevent loss values from becoming too small due to division by dimensions.
         """
         # Reshape weights for proper broadcasting
         weights = 1.0 / (1.0 + noise_level * 10.0)  # More weight to low-noise steps
         weights = weights.view(-1, 1, 1, 1)  # Reshape to [batch_size, 1, 1, 1]
 
-        # MSE component
+        # Squared Euclidean distance component (NOT divided by dimensions)
         squared_error = (pred - target) ** 2
         weighted_squared_error = weights * squared_error
-        mse_loss = torch.mean(weighted_squared_error)
+
+        # Use sum instead of mean - this is the key change
+        euc_loss = torch.sum(weighted_squared_error)
 
         # Process each sample in the batch individually for cosine similarity
         batch_size = pred.shape[0]
@@ -691,24 +699,27 @@ def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diff
             sample_cos_loss = weights[i].item() * (1.0 - cos_sim)
             cos_loss_sum += sample_cos_loss
 
-        cos_loss = cos_loss_sum / batch_size
+        cos_loss = cos_loss_sum
 
-        # Scale the cosine loss to be roughly in the same range as MSE
-        # Adaptive scaling based on current MSE value
-        mse_scale = max(1.0, mse_loss.item())
-        scaled_cos_loss = cos_loss / mse_scale
+        # Scale cosine loss to match the magnitude of Euclidean loss
+        # This is important since we're now using sum instead of mean
+        # which changes the scale of the Euclidean loss
+        euc_scale = max(1.0, euc_loss.item() / (batch_size * 100))
+        scaled_cos_loss = cos_loss * euc_scale
 
         # Balance the two loss components
-        lambda_mse = 0.99  # Weight for MSE (can be adjusted)
+        lambda_euc = 0.99  # Weight for Euclidean loss
         lambda_cos = 0.01  # Weight for cosine loss
 
         # Combine losses
-        total_loss = lambda_mse * mse_loss + lambda_cos * scaled_cos_loss
+        total_loss = lambda_euc * euc_loss + lambda_cos * scaled_cos_loss
 
-        # Log the components if needed for debugging
-        if torch.rand(1).item() < 0.01:  # Log occasionally (1% of batches)
-            print(f"MSE: {mse_loss.item():.6f}, Cos: {cos_loss.item():.6f}, "
-                  f"Scaled Cos: {scaled_cos_loss.item():.6f}, Total: {total_loss.item():.6f}")
+        # Log the components for monitoring (occasionally)
+        if torch.rand(1).item() < 0.01:
+            print(f"Euclidean Loss: {euc_loss.item():.4f}, "
+                  f"Cos Loss: {cos_loss.item():.4f}, "
+                  f"Scaled Cos: {scaled_cos_loss.item():.4f}, "
+                  f"Total: {total_loss.item():.4f}")
 
         return total_loss
 
@@ -839,7 +850,7 @@ def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diff
             torch.save(ema_denoiser.state_dict(), f'fashion_mnist_latent_diffusion_ema_epoch_{epoch + 1}.pt')
 
         # Save generated visualizations - use EMA model for more stable results
-        if (epoch + 1) % 5 == 0:
+        if (epoch + 1) % 1 == 0:
             # Temporarily swap to EMA model for generation
             orig_state_dict = copy.deepcopy(denoiser.state_dict())
             denoiser.load_state_dict(ema_denoiser.state_dict())
