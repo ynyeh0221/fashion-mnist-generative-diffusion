@@ -708,8 +708,8 @@ def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diff
         scaled_cos_loss = cos_loss * euc_scale
 
         # Balance the two loss components
-        lambda_euc = 0.99  # Weight for Euclidean loss
-        lambda_cos = 0.01  # Weight for cosine loss
+        lambda_euc = 1  # Weight for Euclidean loss
+        lambda_cos = 0  # Weight for cosine loss
 
         # Combine losses
         total_loss = lambda_euc * euc_loss + lambda_cos * scaled_cos_loss
@@ -1035,7 +1035,7 @@ def visualize_denoising_progression(latent_model, num_diffusion_steps, alphas_cu
         plt.tight_layout()
         output_dir = 'epoch_visualizations_latent_denoising'
         os.makedirs(output_dir, exist_ok=True)
-        plt.savefig(os.path.join(output_dir, f'latent_diffusion_denoising_progression_class_{class_idx}.png', dpi=200))
+        plt.savefig(os.path.join(output_dir, f'latent_diffusion_denoising_progression_class_{class_idx}.png'), dpi=200)
         plt.close()
 
     vae.train()
@@ -1141,7 +1141,7 @@ def generate_latent_diffusion_samples(latent_model, epoch, num_diffusion_steps, 
 
 
 # Define diffusion timesteps
-num_diffusion_steps = 50
+num_diffusion_steps = 100
 
 # Main function
 if __name__ == '__main__':
