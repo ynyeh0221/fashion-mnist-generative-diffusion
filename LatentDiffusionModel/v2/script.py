@@ -642,7 +642,7 @@ def train_vae(vae, num_epochs=50, lr=0.0001):
 
 
 # Modified train_latent_diffusion function
-def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diffusion_steps=100):
+def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diffusion_steps=20):
     print("Starting latent diffusion model training...")
 
     # Freeze VAE parameters
