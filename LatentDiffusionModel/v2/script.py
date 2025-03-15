@@ -714,13 +714,6 @@ def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diff
         # Combine losses
         total_loss = lambda_euc * euc_loss + lambda_cos * scaled_cos_loss
 
-        # Log the components for monitoring (occasionally)
-        if torch.rand(1).item() < 0.01:
-            print(f"Euclidean Loss: {euc_loss.item():.4f}, "
-                  f"Cos Loss: {cos_loss.item():.4f}, "
-                  f"Scaled Cos: {scaled_cos_loss.item():.4f}, "
-                  f"Total: {total_loss.item():.4f}")
-
         return total_loss
 
     # Training parameters
@@ -795,8 +788,8 @@ def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diff
                     pred_std = predicted_noise.std().item()
                     target_mean = target_noise.mean().item()
                     target_std = target_noise.std().item()
-                    print(f"Pred noise: mean={pred_mean:.4f}, std={pred_std:.4f}")
-                    print(f"Target noise: mean={target_mean:.4f}, std={target_std:.4f}")
+                    # print(f"Pred noise: mean={pred_mean:.4f}, std={pred_std:.4f}")
+                    # print(f"Target noise: mean={target_mean:.4f}, std={target_std:.4f}")
 
             # Apply weighted loss based on noise level
             loss = hybrid_loss(predicted_noise, target_noise, noise_level)
@@ -806,16 +799,6 @@ def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diff
                 continue  # skip this batch
 
             loss.backward()
-
-            # Monitor gradients
-            if step % 100 == 0:
-                total_grad_norm = 0
-                for p in denoiser.parameters():
-                    if p.grad is not None:
-                        param_norm = p.grad.data.norm(2)
-                        total_grad_norm += param_norm.item() ** 2
-                total_grad_norm = total_grad_norm ** 0.5
-                print(f"Gradient norm before clipping: {total_grad_norm:.4f}")
 
             # Increased gradient clipping threshold for higher learning rate
             torch.nn.utils.clip_grad_norm_(denoiser.parameters(), max_norm=1.0)
@@ -856,7 +839,7 @@ def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diff
             denoiser.load_state_dict(ema_denoiser.state_dict())
             generate_latent_diffusion_samples(latent_model, epoch, num_diffusion_steps, alphas_cumprod, betas)
             for class_idx in range(10):
-                visualize_denoising_progression(
+                visualize_latent_space_denoising(
                     latent_model,
                     num_diffusion_steps,
                     alphas_cumprod,
@@ -940,28 +923,164 @@ def visualize_vae_reconstruction(vae, epoch):
         plt.close()
     vae.train()
 
+# Add this new function to your code
+def dpm_solver_2_sampling(latent_model, num_diffusion_steps, alphas_cumprod, class_labels=None, batch_size=1,
+                          num_sampling_steps=10):
+    """
+    Implements DPM-Solver-2 sampling algorithm for faster generation
+
+    Args:
+        latent_model: The latent diffusion model
+        num_diffusion_steps: Total number of diffusion steps in the model
+        alphas_cumprod: The pre-computed alphas cumulative product
+        class_labels: Optional class conditioning labels
+        batch_size: Number of samples to generate at once
+        num_sampling_steps: Number of solver steps (much fewer than DDIM)
+
+    Returns:
+        Decoded images from the generated latent samples
+    """
+    vae = latent_model.vae
+    denoiser = latent_model.denoiser
+    latent_dim = latent_model.latent_dim
+    latent_spatial_size = 16
+    device = next(denoiser.parameters()).device
+
+    # Set evaluation mode
+    vae.eval()
+    denoiser.eval()
+
+    # Prepare model to generate samples
+    with torch.no_grad():
+        # Create initial latent noise
+        z = torch.randn((batch_size, latent_dim, latent_spatial_size, latent_spatial_size)).to(device)
+        z = torch.clamp(z, -4.0, 4.0)
+
+        # Setup timestamps for solver
+        timesteps = torch.linspace(1, 0, num_sampling_steps + 1).to(device) * (num_diffusion_steps - 1)
+        timesteps = (timesteps.long())[:-1]
+
+        # For tracking intermediate results if needed
+        intermediate_results = []
+
+        # Process class labels if provided
+        if class_labels is None:
+            # If no labels provided, use a tensor of zeros
+            class_labels = torch.zeros(batch_size, dtype=torch.long).to(device)
+        else:
+            if isinstance(class_labels, torch.Tensor):
+                class_labels = class_labels.clone().detach().to(device)
+            else:
+                class_labels = torch.tensor(class_labels, device=device)
+            if class_labels.shape[0] == 1 and batch_size > 1:
+                # Expand single label to batch size if needed
+                class_labels = class_labels.expand(batch_size)
+
+        # DPM-Solver-2 algorithm
+        for i in range(len(timesteps) - 1):
+            # Current and next time steps
+            t_cur = timesteps[i]
+            t_next = timesteps[i + 1]
+
+            # Normalized time for model input
+            t_normalized = t_cur / num_diffusion_steps
+            if isinstance(t_normalized, torch.Tensor):
+                t_normalized_tensor = t_normalized.clone().detach().to(device)
+            else:
+                t_normalized_tensor = torch.tensor(t_normalized, device=device)
+            noise_level_scalar = (1 - torch.cos(t_normalized_tensor * math.pi / 2)).item()
+            noise_level = torch.full((batch_size, 1), noise_level_scalar, device=device)
+
+            # Get noise prediction from model
+            noise_pred = denoiser(z, noise_level, class_labels)
+            noise_pred = torch.clamp(noise_pred, -5.0, 5.0)
+
+            # Get alpha values for current timestep
+            alpha_cur = alphas_cumprod[t_cur].clamp(min=1e-5)
+            alpha_next = alphas_cumprod[t_next].clamp(min=1e-5)
+
+            # Current x0 prediction
+            x0_pred = (z - torch.sqrt(1 - alpha_cur) * noise_pred) / torch.sqrt(alpha_cur)
+            x0_pred = torch.clamp(x0_pred, -10.0, 10.0)
+
+            # First-order update (DPM-Solver-1)
+            if i == 0:
+                # For the first step, use simpler update
+                z = torch.sqrt(alpha_next) * x0_pred + torch.sqrt(1 - alpha_next) * noise_pred
+                intermediate_results.append(z.clone())
+            else:
+                # For subsequent steps, use second-order solver
+                h = t_next - t_cur
+                h_last = t_cur - timesteps[i - 1]
+
+                # Get intermediate values needed for the second-order step
+                r = h_last / h
+
+                # Calculate intermediate latent for obtaining the second noise prediction
+                z_mid = torch.sqrt(alpha_next) * x0_pred + torch.sqrt(1 - alpha_next) * noise_pred
+
+                # Get noise prediction at the intermediate latent
+                t_next_normalized = t_next / num_diffusion_steps
+                if isinstance(t_next_normalized, torch.Tensor):
+                    t_next_tensor = t_next_normalized.clone().detach().to(device)
+                else:
+                    t_next_tensor = torch.tensor(t_next_normalized, device=device)
+                noise_level_next_scalar = (1 - torch.cos(t_next_tensor * math.pi / 2)).item()
+                noise_level_next = torch.full((batch_size, 1), noise_level_next_scalar, device=device)
+                noise_pred_next = denoiser(z_mid, noise_level_next, class_labels)
+                noise_pred_next = torch.clamp(noise_pred_next, -5.0, 5.0)
+
+                # Second predicted x0
+                x0_pred_next = (z_mid - torch.sqrt(1 - alpha_next) * noise_pred_next) / torch.sqrt(alpha_next)
+                x0_pred_next = torch.clamp(x0_pred_next, -10.0, 10.0)
+
+                # Apply second-order correction
+                # This weighted combination of x0 predictions gives a more accurate estimate
+                z = torch.sqrt(alpha_next) * ((1 + 1 / r) * x0_pred_next - (1 / r) * x0_pred) + \
+                    torch.sqrt(1 - alpha_next) * noise_pred_next
+
+                # Safety clamp
+                z = torch.clamp(z, -20.0, 20.0)
+
+                # Store intermediate result if needed
+                intermediate_results.append(z.clone())
+
+        # Final step (t=0) - convert spatial latent back to vector for decoding
+        z_flat = F.adaptive_avg_pool2d(z, (1, 1)).squeeze(-1).squeeze(-1)
+
+        # Decode final latent representation to images
+        images = vae.decode(z_flat)
+        images = images.cpu()
+
+    return images, intermediate_results
 
 # Add this function to visualize the denoising progression
-def visualize_denoising_progression(latent_model, num_diffusion_steps, alphas_cumprod, betas, class_idx=0):
+def visualize_latent_space_denoising(latent_model, num_diffusion_steps, alphas_cumprod, betas, class_idx=0):
+    """
+    Visualize the denoising process directly in latent space without decoding to images
+    """
+    import torch
+    import matplotlib.pyplot as plt
+    import os
+
     vae = latent_model.vae
     denoiser = latent_model.denoiser
     latent_spatial_size = 16
+    latent_dim = latent_model.latent_dim
+    device = next(denoiser.parameters()).device
 
     vae.eval()
     denoiser.eval()
 
-    # DDIM sampling parameters
+    # DPM-Solver-2 sampling parameters
     num_sampling_steps = 10  # We'll visualize 10 steps
-    skip = num_diffusion_steps // num_sampling_steps
-    timesteps = list(range(0, num_diffusion_steps, skip))
-    timesteps.reverse()  # Reversed order from T to 0
 
     with torch.no_grad():
-        # Create figure with enough space for all steps plus original and final
-        fig, axes = plt.subplots(1, num_sampling_steps + 2, figsize=(24, 4))
+        # Create figure for visualization
+        fig, axes = plt.subplots(2, num_sampling_steps + 1, figsize=(24, 8))
 
         # Sample a latent vector from standard normal distribution
-        z = torch.randn((1, latent_model.latent_dim, latent_spatial_size, latent_spatial_size)).to(device)
+        z = torch.randn((1, latent_dim, latent_spatial_size, latent_spatial_size)).to(device)
         z = torch.clamp(z, -4.0, 4.0)  # Initial clamping
 
         # Set the class label
@@ -970,72 +1089,125 @@ def visualize_denoising_progression(latent_model, num_diffusion_steps, alphas_cu
         # Save the initial noisy latent
         initial_z = z.clone()
 
-        # Display the initial noisy image
-        z_flat = F.adaptive_avg_pool2d(initial_z, (1, 1)).squeeze(-1).squeeze(-1)
-        initial_img = vae.decode(z_flat)
-        initial_img = initial_img.cpu().permute(0, 2, 3, 1).squeeze().numpy()
-        axes[0].imshow(initial_img, cmap='gray', vmin=0, vmax=1)
-        axes[0].set_title(f"Noise t={timesteps[0]}")
-        axes[0].axis('off')
+        # Select a middle channel to visualize
+        channel_to_vis = latent_dim // 2  # Middle channel
 
-        # Track progression of denoising
-        for i, t_current in enumerate(timesteps[:-1]):
-            t_next = timesteps[i + 1] if i + 1 < len(timesteps) else 0
+        # Visualize initial latent
+        latent_vis = initial_z[0, channel_to_vis].cpu().numpy()
+        axes[0, 0].imshow(latent_vis, cmap='viridis')
+        axes[0, 0].set_title(f"Initial Latent (channel {channel_to_vis})")
+        axes[0, 0].axis('off')
 
-            # Current timestep noise level
-            noise_level = (1 - torch.cos(torch.tensor([t_current], device=device) /
-                                         num_diffusion_steps * math.pi / 2)).view(-1, 1)
+        # Also show the standard deviation across channels to see overall structure
+        latent_std = torch.std(initial_z[0], dim=0).cpu().numpy()
+        axes[1, 0].imshow(latent_std, cmap='hot')
+        axes[1, 0].set_title("Initial Latent (std across channels)")
+        axes[1, 0].axis('off')
 
-            # Predict noise
+        # Setup timesteps for solver
+        timesteps = torch.linspace(1, 0, num_sampling_steps + 1).to(device) * (num_diffusion_steps - 1)
+        timesteps = (timesteps.long())[:-1]  # Exclude t=0
+
+        intermediate_zs = []  # To store intermediate latents
+
+        # DPM-Solver-2 algorithm
+        for i in range(len(timesteps) - 1):
+            # Current and next time steps
+            t_cur = timesteps[i]
+            t_next = timesteps[i + 1]
+
+            # Normalized time for model input
+            t_normalized = t_cur / num_diffusion_steps
+            if isinstance(t_normalized, torch.Tensor):
+                t_normalized_tensor = t_normalized.clone().detach().to(device)
+            else:
+                t_normalized_tensor = torch.tensor(t_normalized, device=device)
+            noise_level_scalar = (1 - torch.cos(t_normalized_tensor * math.pi / 2)).item()
+            noise_level = torch.full((1, 1), noise_level_scalar, device=device)
+
+            # Get noise prediction from model
             noise_pred = denoiser(z, noise_level, label)
             noise_pred = torch.clamp(noise_pred, -5.0, 5.0)
 
-            # Get current x0 prediction
-            alpha_current = alphas_cumprod[t_current].clamp(min=1e-5)
-            alpha_current_sqrt = torch.sqrt(alpha_current)
-            sigma_current = torch.sqrt((1 - alpha_current).clamp(min=0))
+            # Get alpha values for current timestep
+            alpha_cur = alphas_cumprod[t_cur].clamp(min=1e-5)
+            alpha_next = alphas_cumprod[t_next].clamp(min=1e-5)
 
-            # Current predicted x0
-            x0_pred = (z - sigma_current * noise_pred) / alpha_current_sqrt
+            # Current x0 prediction
+            x0_pred = (z - torch.sqrt(1 - alpha_cur) * noise_pred) / torch.sqrt(alpha_cur)
             x0_pred = torch.clamp(x0_pred, -10.0, 10.0)
 
-            if t_next > 0:
-                # DDIM update formula for next noisy sample
-                alpha_next = alphas_cumprod[t_next].clamp(min=1e-5)
-                alpha_next_sqrt = torch.sqrt(alpha_next)
-
-                # Simplified DDIM deterministic update (eta=0)
-                z = alpha_next_sqrt * x0_pred + torch.sqrt(1 - alpha_next) * noise_pred
+            # First-order update (DPM-Solver-1)
+            if i == 0:
+                # For the first step, use simpler update
+                z = torch.sqrt(alpha_next) * x0_pred + torch.sqrt(1 - alpha_next) * noise_pred
             else:
-                # Last step - use predicted x0 directly
-                z = x0_pred
+                # For subsequent steps, use second-order solver
+                h = t_next - t_cur
+                h_last = t_cur - timesteps[i - 1]
 
-            # Safety clamp after update
-            z = torch.clamp(z, -20.0, 20.0)
+                # Get intermediate values needed for the second-order step
+                r = h_last / h
 
-            # Decode and visualize the current state
-            z_flat = F.adaptive_avg_pool2d(z, (1, 1)).squeeze(-1).squeeze(-1)
-            img = vae.decode(z_flat)
-            img = img.cpu().permute(0, 2, 3, 1).squeeze().numpy()
+                # Calculate intermediate latent for obtaining the second noise prediction
+                z_mid = torch.sqrt(alpha_next) * x0_pred + torch.sqrt(1 - alpha_next) * noise_pred
 
-            # Replace any NaNs in the image
-            if np.isnan(img).any():
-                img = np.nan_to_num(img, nan=0.5)
+                # Get noise prediction at the intermediate latent
+                t_next_normalized = t_next / num_diffusion_steps
+                if isinstance(t_next_normalized, torch.Tensor):
+                    t_next_tensor = t_next_normalized.clone().detach().to(device)
+                else:
+                    t_next_tensor = torch.tensor(t_next_normalized, device=device)
+                noise_level_next_scalar = (1 - torch.cos(t_next_tensor * math.pi / 2)).item()
+                noise_level_next = torch.full((1, 1), noise_level_next_scalar, device=device)
 
-            # Display image
-            axes[i + 1].imshow(img, cmap='gray', vmin=0, vmax=1)
-            axes[i + 1].set_title(f"t={t_next}")
-            axes[i + 1].axis('off')
+                noise_pred_next = denoiser(z_mid, noise_level_next, label)
+                noise_pred_next = torch.clamp(noise_pred_next, -5.0, 5.0)
 
-        # Display final denoised image
-        axes[-1].imshow(img, cmap='gray', vmin=0, vmax=1)
-        axes[-1].set_title(f"Final ({class_names[class_idx]})")
-        axes[-1].axis('off')
+                # Second predicted x0
+                x0_pred_next = (z_mid - torch.sqrt(1 - alpha_next) * noise_pred_next) / torch.sqrt(alpha_next)
+                x0_pred_next = torch.clamp(x0_pred_next, -10.0, 10.0)
+
+                # Apply second-order correction
+                # This weighted combination of x0 predictions gives a more accurate estimate
+                z = torch.sqrt(alpha_next) * ((1 + 1 / r) * x0_pred_next - (1 / r) * x0_pred) + \
+                    torch.sqrt(1 - alpha_next) * noise_pred_next
+
+                # Safety clamp
+                z = torch.clamp(z, -20.0, 20.0)
+
+            # Store intermediate result
+            intermediate_zs.append(z.clone())
+
+            # Visualize latent at this step
+            latent_vis = z[0, channel_to_vis].cpu().numpy()
+            axes[0, i + 1].imshow(latent_vis, cmap='viridis')
+            axes[0, i + 1].set_title(f"Step {i + 1} Latent (ch {channel_to_vis})")
+            axes[0, i + 1].axis('off')
+
+            # Also show the standard deviation across channels
+            latent_std = torch.std(z[0], dim=0).cpu().numpy()
+            axes[1, i + 1].imshow(latent_std, cmap='hot')
+            axes[1, i + 1].set_title(f"Step {i + 1} Latent (std)")
+            axes[1, i + 1].axis('off')
+
+        # Handle final step if needed
+        if len(intermediate_zs) < num_sampling_steps:
+            # Visualize the final latent state
+            latent_vis = z[0, channel_to_vis].cpu().numpy()
+            axes[0, -1].imshow(latent_vis, cmap='viridis')
+            axes[0, -1].set_title(f"Final Latent (ch {channel_to_vis})")
+            axes[0, -1].axis('off')
+
+            latent_std = torch.std(z[0], dim=0).cpu().numpy()
+            axes[1, -1].imshow(latent_std, cmap='hot')
+            axes[1, -1].set_title(f"Final Latent (std)")
+            axes[1, -1].axis('off')
 
         plt.tight_layout()
-        output_dir = 'epoch_visualizations_latent_denoising'
+        output_dir = 'epoch_visualizations_latent_space'
         os.makedirs(output_dir, exist_ok=True)
-        plt.savefig(os.path.join(output_dir, f'latent_diffusion_denoising_progression_class_{class_idx}.png'), dpi=200)
+        plt.savefig(os.path.join(output_dir, f'latent_space_denoising_class_{class_idx}.png'), dpi=200)
         plt.close()
 
     vae.train()
@@ -1050,74 +1222,31 @@ def generate_latent_diffusion_samples(latent_model, epoch, num_diffusion_steps, 
     vae.eval()
     denoiser.eval()
 
-    # DDIM sampling parameters - more steps for better quality
-    eta = 0.0  # Deterministic sampling
-    num_sampling_steps = 50  # More sampling steps than before
-    skip = num_diffusion_steps // num_sampling_steps
-    timesteps = list(range(0, num_diffusion_steps, skip))
-    timesteps.reverse()  # Reversed order from T to 0
+    # DPM-Solver-2 sampling parameters
+    num_sampling_steps = 15  # Much fewer steps than DDIM (50)
 
     with torch.no_grad():
         # Generate samples for each class
         fig, axes = plt.subplots(5, 10, figsize=(20, 10))
 
         for class_idx in range(10):
+            # Generate 5 samples at once for efficiency
+            batch_size = 5
+            class_labels = torch.tensor([class_idx] * batch_size, device=device)
+
+            # Use DPM-Solver-2 to generate images
+            images, _ = dpm_solver_2_sampling(
+                latent_model,
+                num_diffusion_steps,
+                alphas_cumprod,
+                class_labels=class_labels,
+                batch_size=batch_size,
+                num_sampling_steps=num_sampling_steps
+            )
+
+            # Process and display the generated images
             for sample_idx in range(5):
-                # Sample a latent vector from standard normal distribution
-                z = torch.randn((1, latent_model.latent_dim, latent_spatial_size, latent_spatial_size)).to(device)
-                z = torch.clamp(z, -4.0, 4.0)  # Tighter initial clamping
-
-                label = torch.tensor([class_idx], device=device)
-
-                # DDIM reverse diffusion process
-                for i in range(len(timesteps) - 1):
-                    t_current = timesteps[i]
-                    t_next = timesteps[i + 1] if i + 1 < len(timesteps) else 0
-
-                    # Current timestep noise level - use float division for more precision
-                    noise_level = (1 - torch.cos(torch.tensor([t_current], device=device) /
-                                                 num_diffusion_steps * math.pi / 2)).view(-1, 1)
-
-                    # Predict noise
-                    noise_pred = denoiser(z, noise_level, label)
-
-                    # Clamp predictions for stability - tighter for final steps
-                    final_steps = (i >= len(timesteps) - 10)
-                    if final_steps:
-                        noise_pred = torch.clamp(noise_pred, -3.0, 3.0)
-                    else:
-                        noise_pred = torch.clamp(noise_pred, -5.0, 5.0)
-
-                    # Get current x0 prediction
-                    alpha_current = alphas_cumprod[t_current].clamp(min=1e-5)
-                    alpha_current_sqrt = torch.sqrt(alpha_current)
-                    sigma_current = torch.sqrt((1 - alpha_current).clamp(min=0))
-
-                    # Current predicted x0
-                    x0_pred = (z - sigma_current * noise_pred) / alpha_current_sqrt
-                    x0_pred = torch.clamp(x0_pred, -10.0, 10.0)
-
-                    if t_next > 0:
-                        # DDIM update formula for next noisy sample
-                        alpha_next = alphas_cumprod[t_next].clamp(min=1e-5)
-                        alpha_next_sqrt = torch.sqrt(alpha_next)
-
-                        # Simplified DDIM deterministic update (eta=0)
-                        z = alpha_next_sqrt * x0_pred + torch.sqrt(1 - alpha_next) * noise_pred
-                    else:
-                        # Last step - use predicted x0 directly
-                        z = x0_pred
-
-                    # Safety clamp after update
-                    z = torch.clamp(z, -20.0, 20.0)
-
-                # Process final latent for decoding
-                # Improved spatial to vector conversion
-                z_flat = F.adaptive_avg_pool2d(z, (1, 1)).squeeze(-1).squeeze(-1)
-
-                # Decode latent representation to image
-                img = vae.decode(z_flat)
-                img = img.cpu().permute(0, 2, 3, 1).squeeze().numpy()
+                img = images[sample_idx].permute(1, 2, 0).squeeze().numpy()
 
                 # Replace any NaNs in final image
                 if np.isnan(img).any():
@@ -1133,7 +1262,7 @@ def generate_latent_diffusion_samples(latent_model, epoch, num_diffusion_steps, 
         plt.tight_layout()
         output_dir = 'epoch_visualizations_latent'
         os.makedirs(output_dir, exist_ok=True)
-        plt.savefig(os.path.join(output_dir, f'latent_diffusion_samples_epoch_{epoch + 1}_ddim.png'), dpi=200)
+        plt.savefig(os.path.join(output_dir, f'latent_diffusion_samples_epoch_{epoch + 1}_dpm.png'), dpi=200)
         plt.close()
 
     vae.train()
@@ -1141,7 +1270,7 @@ def generate_latent_diffusion_samples(latent_model, epoch, num_diffusion_steps, 
 
 
 # Define diffusion timesteps
-num_diffusion_steps = 100
+num_diffusion_steps = 20
 
 # Main function
 if __name__ == '__main__':
