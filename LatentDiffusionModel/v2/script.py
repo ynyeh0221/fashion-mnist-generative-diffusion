@@ -458,17 +458,11 @@ class LatentDiffusionModel(nn.Module):
     def sample_from_latent(self, x):
         with torch.no_grad():
             mu, log_var = self.vae.encode(x)
-
-            # Use mean directly for more stable representation
             z = mu
-
-            # Spread to spatial dimensions
             latent_spatial_size = 16
             z = z.view(z.size(0), z.size(1), 1, 1)
             z = F.interpolate(z, size=(latent_spatial_size, latent_spatial_size), mode='bilinear', align_corners=True)
-
-            # Ensure latent is in a reasonable range
-            z = torch.clamp(z, -5.0, 5.0)
+            z = F.group_norm(z, num_groups=4)
         return z
 
     def decode(self, z):
