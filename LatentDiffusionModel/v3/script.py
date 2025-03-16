@@ -991,18 +991,47 @@ def train_autoencoder(autoencoder, num_epochs=80, lr=1e-4, visualize_every=5, sa
 
 # Training function for the diffusion model
 def train_diffusion(autoencoder, unet, num_epochs=100, lr=1e-3, visualize_every=10, save_dir="./results"):
+    """
+    Train the diffusion model with dynamic batch size adjustment.
+
+    Args:
+        autoencoder: Trained autoencoder model
+        unet: UNet model for noise prediction
+        num_epochs: Number of training epochs
+        lr: Initial learning rate
+        visualize_every: Epoch interval for visualizations
+        save_dir: Directory to save results
+
+    Returns:
+        unet: Trained UNet model
+        diffusion: Trained diffusion model
+        loss_history: List of average losses per epoch
+    """
     print("Starting Diffusion Model training...")
     os.makedirs(save_dir, exist_ok=True)
 
     device = next(autoencoder.parameters()).device
     autoencoder.eval()  # Set autoencoder to evaluation mode
 
+    # Get reference to the training dataset
+    train_dataset = train_loader.dataset
+
+    # Initialize batch size tracking
+    current_batch_size = batch_size  # Use the global batch size to start
+    current_loader = train_loader
+
     # Create diffusion model
     diffusion = SimpleDenoiseDiffusion(unet, n_steps=1000, device=device)
-    optimizer = torch.optim.AdamW(unet.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, T_0=10, T_mult=2, eta_min=1e-6
+    optimizer = torch.optim.AdamW(unet.parameters(), lr=lr, weight_decay=5e-4)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5, verbose=True
     )
+
+    # For early stopping
+    best_loss = float('inf')
+    patience = 15
+    counter = 0
+    best_model_path = f"{save_dir}/best_diffusion_model.pt"
 
     # Training loop
     loss_history = []
@@ -1011,8 +1040,41 @@ def train_diffusion(autoencoder, unet, num_epochs=100, lr=1e-3, visualize_every=
     plt.figure(figsize=(10, 5))
 
     for epoch in range(num_epochs):
+        # Dynamic batch size adjustment logic
+        if epoch == 50:  # When reaching the stagnation point
+            new_batch_size = current_batch_size // 2  # Halve the batch size
+            print(f"\nReducing batch size from {current_batch_size} to {new_batch_size} at epoch {epoch + 1}")
+            current_batch_size = new_batch_size
+
+            # Create a new data loader with the smaller batch size
+            current_loader = DataLoader(
+                train_dataset,
+                batch_size=current_batch_size,
+                shuffle=True,
+                num_workers=2,
+                pin_memory=True
+            )
+
+        # Alternatively, use loss plateau detection for dynamic adjustment
+        elif epoch > 30 and len(loss_history) >= 3:  # At least 3 epochs of history
+            # If little improvement in the last 3 epochs
+            if loss_history[-3] - loss_history[-1] < 0.0005:
+                # And current batch size is above some minimum
+                if current_batch_size > 64:
+                    new_batch_size = current_batch_size // 2
+                    print(f"\nLoss plateau detected. Reducing batch size from {current_batch_size} to {new_batch_size}")
+                    current_batch_size = new_batch_size
+                    current_loader = DataLoader(
+                        train_dataset,
+                        batch_size=current_batch_size,
+                        shuffle=True,
+                        num_workers=2,
+                        pin_memory=True
+                    )
+
         epoch_loss = 0
-        for batch_idx, (data, _) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}")):
+        # Use the current data loader
+        for batch_idx, (data, _) in enumerate(tqdm(current_loader, desc=f"Epoch {epoch + 1}/{num_epochs}")):
             data = data.to(device)
 
             # Encode images to latent space
@@ -1035,12 +1097,29 @@ def train_diffusion(autoencoder, unet, num_epochs=100, lr=1e-3, visualize_every=
             if (batch_idx + 1) % 100 == 0:
                 print(f"Epoch {epoch + 1}, Batch {batch_idx + 1}, Loss: {loss.item():.6f}")
 
-        # Calculate average loss
-        avg_loss = epoch_loss / len(train_loader)
+        # Calculate average loss considering the new number of batches
+        avg_loss = epoch_loss / len(current_loader)
         loss_history.append(avg_loss)
         print(f"Epoch {epoch + 1}/{num_epochs}, Average Loss: {avg_loss:.6f}")
 
-        scheduler.step()
+        # Learning rate scheduling
+        scheduler.step(avg_loss)
+
+        # Early stopping logic
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            counter = 0
+            # Save the best model
+            torch.save(unet.state_dict(), best_model_path)
+            print(f"New best model saved with loss: {best_loss:.6f}")
+        else:
+            counter += 1
+            print(f"EarlyStopping counter: {counter} out of {patience}")
+            if counter >= patience:
+                print(f"Early stopping triggered at epoch {epoch + 1}")
+                # Load the best model before breaking
+                unet.load_state_dict(torch.load(best_model_path))
+                break
 
         # Plot and save the current loss curve
         plt.clf()
@@ -1051,12 +1130,12 @@ def train_diffusion(autoencoder, unet, num_epochs=100, lr=1e-3, visualize_every=
         plt.grid(True)
         plt.savefig(f"{save_dir}/diffusion_loss_progress.png")
 
-        # Visualize samples and denoising process
+        # Visualize samples and denoising process periodically
         if (epoch + 1) % 100 == 0 or epoch == num_epochs - 1:
             generate_samples_grid(autoencoder, diffusion, epoch + 1, save_dir=save_dir)
 
         if (epoch + 1) % visualize_every == 0 or epoch == num_epochs - 1:
-            # Visualize denoising process
+            # Visualize denoising process for each class
             for target_class in range(10):  # Visualize paths to all classes
                 visualize_denoising_steps(autoencoder, diffusion, epoch + 1,
                                           class_idx=target_class, save_dir=save_dir)
