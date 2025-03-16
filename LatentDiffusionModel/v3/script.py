@@ -21,7 +21,7 @@ transform = transforms.Compose([
 ])
 
 # Load Fashion MNIST dataset
-batch_size = 128  # Increased for more stable gradients
+batch_size = 256  # Increased for more stable gradients
 train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, transform=transform)
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
 
@@ -202,7 +202,7 @@ class TimeEmbedding(nn.Module):
 
 # Residual block for UNet
 class UNetResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, d_time=16, num_groups=8):
+    def __init__(self, in_channels, out_channels, d_time=16, num_groups=8, dropout_rate=0.2):
         super().__init__()
 
         # Feature normalization and convolution
@@ -212,6 +212,8 @@ class UNetResidualBlock(nn.Module):
         # Time embedding projection
         self.time_emb = nn.Linear(d_time, out_channels)
         self.act = Swish()
+
+        self.dropout = nn.Dropout(dropout_rate)
 
         # Second convolution
         self.norm2 = nn.GroupNorm(min(num_groups, out_channels), out_channels)
@@ -231,6 +233,9 @@ class UNetResidualBlock(nn.Module):
 
         # Second part
         h = self.act(self.norm2(h))
+
+        h = self.dropout(h)
+
         h = self.conv2(h)
 
         # Residual connection
@@ -291,7 +296,7 @@ class SwitchSequential(nn.Sequential):
 
 # UNet architecture for noise prediction
 class SimpleUNet(nn.Module):
-    def __init__(self, in_channels=1, hidden_dims=[16, 32, 64]):
+    def __init__(self, in_channels=1, hidden_dims=[16, 32, 64], dropout_rate=0.2):
         super().__init__()
 
         # Time embedding
@@ -314,6 +319,8 @@ class SimpleUNet(nn.Module):
                 ])
             )
             input_dim = dim
+
+        self.dropout_mid = nn.Dropout(dropout_rate)
 
         # Middle block (bottleneck)
         self.middle_blocks = nn.ModuleList([
@@ -338,6 +345,8 @@ class SimpleUNet(nn.Module):
             )
             hidden_dims[-1] = dim
 
+        self.dropout_final = nn.Dropout(dropout_rate)
+
         # Final blocks - Handle concatenated input
         self.final_block = SwitchSequential(
             UNetResidualBlock(hidden_dims[0] * 2, hidden_dims[0]),
@@ -361,6 +370,8 @@ class SimpleUNet(nn.Module):
             skip_connections.append(x)
             x = downsample(x)
 
+        x = self.dropout_mid(x)
+
         # Middle blocks
         for block in self.middle_blocks:
             if isinstance(block, UNetAttentionBlock):
@@ -374,6 +385,8 @@ class SimpleUNet(nn.Module):
             x = torch.cat([x, skip_connections.pop()], dim=1)  # Then concatenate
             x = resblock1(x, t_emb)  # Then process
             x = resblock2(x, t_emb)
+
+        x = self.dropout_final(x)
 
         # Final blocks
         x = torch.cat([x, skip_connections.pop()], dim=1)
@@ -910,7 +923,7 @@ def generate_samples_grid(autoencoder, diffusion, epoch, n_per_class=5, save_dir
     print(f"Generated sample grid for epoch {epoch} with clearly labeled fashion categories")
 
 # Modified training function for the autoencoder with enhanced visualizations
-def train_autoencoder(autoencoder, num_epochs=50, lr=1e-4, visualize_every=5, save_dir="./results"):
+def train_autoencoder(autoencoder, num_epochs=80, lr=1e-4, visualize_every=5, save_dir="./results"):
     print("Starting Autoencoder training...")
     os.makedirs(save_dir, exist_ok=True)
 
@@ -986,7 +999,10 @@ def train_diffusion(autoencoder, unet, num_epochs=100, lr=1e-3, visualize_every=
 
     # Create diffusion model
     diffusion = SimpleDenoiseDiffusion(unet, n_steps=1000, device=device)
-    optimizer = optim.Adam(unet.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(unet.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=10, T_mult=2, eta_min=1e-6
+    )
 
     # Training loop
     loss_history = []
@@ -1011,6 +1027,7 @@ def train_diffusion(autoencoder, unet, num_epochs=100, lr=1e-3, visualize_every=
             # Backward pass
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(unet.parameters(), max_norm=1.0)
             optimizer.step()
 
             epoch_loss += loss.item()
@@ -1023,6 +1040,8 @@ def train_diffusion(autoencoder, unet, num_epochs=100, lr=1e-3, visualize_every=
         loss_history.append(avg_loss)
         print(f"Epoch {epoch + 1}/{num_epochs}, Average Loss: {avg_loss:.6f}")
 
+        scheduler.step()
+
         # Plot and save the current loss curve
         plt.clf()
         plt.plot(range(1, len(loss_history) + 1), loss_history, marker='o')
@@ -1033,7 +1052,7 @@ def train_diffusion(autoencoder, unet, num_epochs=100, lr=1e-3, visualize_every=
         plt.savefig(f"{save_dir}/diffusion_loss_progress.png")
 
         # Visualize samples and denoising process
-        if (epoch + 1) % 5 == 0 or epoch == num_epochs - 1:
+        if (epoch + 1) % 100 == 0 or epoch == num_epochs - 1:
             generate_samples_grid(autoencoder, diffusion, epoch + 1, save_dir=save_dir)
 
         if (epoch + 1) % visualize_every == 0 or epoch == num_epochs - 1:
@@ -1099,7 +1118,15 @@ def main():
     diffusion_path = f"{results_dir}/fashion_mnist_diffusion.pt"
 
     # Create UNet
-    unet = SimpleUNet(in_channels=1, hidden_dims=[16, 32, 64]).to(device)
+    unet = SimpleUNet(in_channels=1, hidden_dims=[32, 64, 128]).to(device)
+
+    def init_weights(m):
+        if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
+            nn.init.kaiming_normal_(m.weight, a=0.2)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+
+    unet.apply(init_weights)
 
     # Check if trained diffusion model exists
     if os.path.exists(diffusion_path):
@@ -1114,7 +1141,7 @@ def main():
         print("No existing diffusion model found. Training a new one...")
         unet, diffusion, diff_losses = train_diffusion(
             autoencoder, unet, num_epochs=100, lr=1e-3,
-            visualize_every=10,  # Visualize every 10 epoch
+            visualize_every=100,  # Visualize every 10 epoch
             save_dir=results_dir
         )
 
