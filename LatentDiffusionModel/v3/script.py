@@ -637,6 +637,15 @@ def visualize_denoising_steps(autoencoder, diffusion, epoch, class_idx=None, sav
     # Visualize the denoising process
     fig, axes = plt.subplots(n_samples, len(timesteps), figsize=(len(timesteps) * 2, n_samples * 2))
 
+    # Create a title for the figure
+    class_description = f"class: {class_names[class_idx]}" if class_idx is not None else "random samples"
+    main_title = f"Diffusion Model Denoising Process (Epoch {epoch}, {class_description})"
+    fig.suptitle(main_title, fontsize=16, y=0.98)
+    
+    # Add descriptive subtitle
+    subtitle = "Each row shows a different sample, columns show progressive denoising from random noise (left) to final image (right)"
+    plt.figtext(0.5, 0.96, subtitle, ha='center', fontsize=12)
+
     # For single sample case
     if n_samples == 1:
         axes = axes.reshape(1, -1)
@@ -648,14 +657,39 @@ def visualize_denoising_steps(autoencoder, diffusion, epoch, class_idx=None, sav
             ax.imshow(img, cmap='gray')
             ax.set_title(f't={t}')
             ax.axis('off')
+            
+            # Add "Noise" label to leftmost column
+            if j == 0:
+                ax.set_ylabel(f"Sample {i+1}", fontsize=10)
+                
+            # Add stage labels to the top row
+            if i == 0:
+                if j == 0:
+                    ax.set_title("Random Noise\nt="+str(t), fontsize=10)
+                elif j == len(timesteps) - 1:
+                    ax.set_title("Final Image\nt="+str(t), fontsize=10)
+                else:
+                    ax.set_title(f"t={t}", fontsize=9)
 
-    plt.tight_layout()
+    # Add a more detailed explanation at the bottom
+    explanation = (
+        "This visualization demonstrates how the diffusion model progressively transforms random noise into fashion items.\n"
+        "The process starts with pure noise (left) and gradually denoises across multiple timesteps to produce the final image (right).\n"
+        f"The model is removing noise according to the learned patterns from the Fashion MNIST dataset."
+    )
+    plt.figtext(0.5, 0.01, explanation, ha='center', fontsize=10, 
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.7))
+
+    plt.tight_layout(rect=[0, 0.04, 1, 0.94])  # Adjust layout to make room for titles
+    
+    # Create safe filename
     title = f"denoising_epoch_{epoch}"
     if class_idx is not None:
         # Replace forward slash with hyphen to avoid file path issues
         safe_class_name = class_names[class_idx].replace('/', '-')
         title += f"_class_{safe_class_name}"
-    plt.savefig(f"{save_dir}/{title}.png")
+    
+    plt.savefig(f"{save_dir}/{title}.png", dpi=150, bbox_inches='tight')
     plt.close()
 
     # Set models back to training mode
