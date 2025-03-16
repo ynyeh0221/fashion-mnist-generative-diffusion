@@ -1114,7 +1114,7 @@ def main():
         print("No existing diffusion model found. Training a new one...")
         unet, diffusion, diff_losses = train_diffusion(
             autoencoder, unet, num_epochs=50, lr=1e-3,
-            visualize_every=1,  # Visualize every epoch
+            visualize_every=5,  # Visualize every 5 epoch
             save_dir=results_dir
         )
 
