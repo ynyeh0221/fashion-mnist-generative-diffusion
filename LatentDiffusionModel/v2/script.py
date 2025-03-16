@@ -71,7 +71,7 @@ class VAE(nn.Module):
 
         self.latent_dim = latent_dim
         # Control parameter for KL weight
-        self.kl_weight = 0.01
+        self.kl_weight = 0.005
 
     def encode(self, x):
         x = self.encoder(x)
@@ -543,9 +543,9 @@ def train_vae(vae, num_epochs=50, lr=0.0001):
     def get_kl_weight(epoch, num_epochs):
         warmup_epochs = num_epochs // 2
         if epoch < warmup_epochs:
-            return 0.01 + (0.05 - 0.01) * (epoch / warmup_epochs)
+            return 0.005 + (0.008 - 0.005) * (epoch / warmup_epochs)
         else:
-            return 0.05
+            return 0.008
 
     # Using MSE loss which is guaranteed to be positive
     def reconstruction_loss(recon_x, x):
