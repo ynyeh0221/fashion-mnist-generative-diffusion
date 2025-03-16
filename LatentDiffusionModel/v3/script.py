@@ -832,7 +832,7 @@ def visualize_denoising_steps(autoencoder, diffusion, epoch, class_idx=None, sav
         title += f"_class_{safe_class_name}"
 
     # Save the figure
-    plt.tight_layout(rect=[0, 0.03, 1, 0.97])
+    fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05, hspace=0.3, wspace=0.1)
     plt.savefig(f"{save_dir}/{title}.png", dpi=300, bbox_inches='tight')
     plt.close()
 
