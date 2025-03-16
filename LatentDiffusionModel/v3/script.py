@@ -595,296 +595,250 @@ def visualize_latent_interpolation(autoencoder, epoch, save_dir="./results"):
     autoencoder.train()
 
 
-def visualize_diffusion_path_in_latent(autoencoder, diffusion, target_class, n_steps=10, save_dir="./results"):
+# Visualize latent space denoising process
+def visualize_denoising_steps(autoencoder, diffusion, epoch, class_idx=None, save_dir="./results"):
     """
-    Visualize how a diffusion path progresses in the latent space t-SNE projection
-    toward a specific target class.
+    Visualize both the denoising process and the corresponding path in latent space.
+
+    Args:
+        autoencoder: Trained autoencoder model
+        diffusion: Trained diffusion model
+        epoch: Current epoch number
+        class_idx: Target class index (0-9)
+        save_dir: Directory to save visualizations
     """
     os.makedirs(save_dir, exist_ok=True)
     device = next(autoencoder.parameters()).device
-    
-    # Set models to eval mode
+
+    # Set models to evaluation mode
     autoencoder.eval()
     diffusion.eps_model.eval()
-    
-    # 1. Create t-SNE projection of the latent space
-    print(f"Generating t-SNE projection of latent space...")
+
+    # ===== PART 1: Setup dimensionality reduction for latent space =====
+    print(f"Generating latent space projection...")
     test_dataset = datasets.FashionMNIST(root="./data", train=False, download=True, transform=transform)
     test_loader = DataLoader(test_dataset, batch_size=500, shuffle=False)
-    
-    # Extract features and labels for t-SNE
+
+    # Extract features and labels
     all_latents = []
     all_labels = []
-    
-    with torch.no_grad():  # Important: disable gradient tracking
+
+    with torch.no_grad():
         for images, labels in test_loader:
             images = images.to(device)
             latents = autoencoder.encode(images)
-            all_latents.append(latents.cpu().numpy())
+            all_latents.append(latents.detach().cpu().numpy())
             all_labels.append(labels.numpy())
-    
+
     # Combine batches
     all_latents = np.vstack(all_latents)
     all_labels = np.concatenate(all_labels)
-    
-    # Use t-SNE for dimensionality reduction
-    print("Computing t-SNE projection...")
-    tsne = TSNE(n_components=2, random_state=42)
-    latents_2d = tsne.fit_transform(all_latents)
-    
-    # 2. Generate a sample and track its diffusion path
-    print(f"Generating diffusion path toward {class_names[target_class]}...")
-    
-    # Start from pure noise
-    x = torch.randn((1, 1, 8, 8), device=device)
-    
-    # Save intermediate states during denoising
-    step_size = diffusion.n_steps // n_steps
+
+    # Use PCA for dimensionality reduction
+    from sklearn.decomposition import PCA
+    print("Computing PCA projection...")
+    pca = PCA(n_components=2, random_state=42)
+    latents_2d = pca.fit_transform(all_latents)
+
+    # ===== PART 2: Setup denoising visualization =====
+    # Parameters for visualization
+    n_samples = 5  # Reduced from 10 to make visualization clearer
+    steps_to_show = 8
+    step_size = diffusion.n_steps // steps_to_show
     timesteps = list(range(0, diffusion.n_steps, step_size))[::-1]
+
+    # Generate sample from pure noise
+    x = torch.randn((n_samples, 1, 8, 8), device=device)
+
+    # Store denoised samples at each timestep
+    samples_per_step = []
+    # Track latent path for the first sample
     path_latents = []
-    
-    # Track denoising progress - use torch.no_grad() to avoid tracking gradients
+
+    # ===== PART 3: Perform denoising and track path =====
     with torch.no_grad():
         for t in timesteps:
+            # Current denoised state
             current_x = x.clone()
-            
+
             # Denoise from current step to t=0
             for time_step in range(t, -1, -1):
                 current_x = diffusion.p_sample(current_x, torch.tensor([time_step], device=device))
-            
-            # Add current state to path, making sure to detach from computation graph
-            path_latents.append(current_x.view(1, -1).detach().cpu().numpy())
-        
-        # Add final denoised state
-        path_latents.append(current_x.view(1, -1).detach().cpu().numpy())
-    
+
+            # Store the latent vector for the first sample for path visualization
+            path_latents.append(current_x[0:1].view(1, -1).detach().cpu().numpy())
+
+            # Decode to images
+            current_x_flat = current_x.view(n_samples, -1)
+            decoded = autoencoder.decode(current_x_flat)
+
+            # Add to samples
+            samples_per_step.append(decoded.cpu())
+
+        # Add final denoised state to path
+        path_latents.append(current_x[0:1].view(1, -1).detach().cpu().numpy())
+
+    # Stack path latents
     path_latents = np.vstack(path_latents)
-    
-    # 3. Project path points to t-SNE space using the already fitted model
-    # We need to ensure path_latents has the same dimensionality as the original latents
-    print("Projecting diffusion path onto t-SNE space...")
-    path_2d = tsne.transform(path_latents)
-    
-    # 4. Plot t-SNE with diffusion path
-    plt.figure(figsize=(12, 10))
-    
+
+    # Project path points to PCA space
+    path_2d = pca.transform(path_latents)
+
+    # ===== PART 4: Create combined visualization =====
+    # Create a figure with 2 subplots: denoising process (top) and latent path (bottom)
+    fig = plt.figure(figsize=(16, 16))
+
+    # Configure subplot layout
+    gs = plt.GridSpec(2, 1, height_ratios=[1.5, 1], hspace=0.3)
+
+    # ===== PART 5: Plot denoising process (top subplot) =====
+    ax_denoising = fig.add_subplot(gs[0])
+
+    # Create a grid for the denoising visualization
+    grid_rows = n_samples
+    grid_cols = len(timesteps)
+
+    # Create a class description
+    class_description = f"class: {class_names[class_idx]}" if class_idx is not None else "random samples"
+
+    # Set title for the denoising subplot
+    ax_denoising.set_title(f"Diffusion Model Denoising Process (Epoch {epoch}, {class_description})",
+                           fontsize=16, pad=10)
+
+    # Hide axis ticks
+    ax_denoising.set_xticks([])
+    ax_denoising.set_yticks([])
+
+    # Create nested gridspec for the denoising images
+    gs_denoising = gs[0].subgridspec(grid_rows, grid_cols, wspace=0.1, hspace=0.1)
+
+    # Plot each denoising step
+    for i in range(n_samples):
+        for j, t in enumerate(timesteps):
+            ax = fig.add_subplot(gs_denoising[i, j])
+            img = samples_per_step[j][i].squeeze().numpy()
+            ax.imshow(img, cmap='gray')
+
+            # Add timestep labels only to the top row
+            if i == 0:
+                ax.set_title(f't={t}', fontsize=9)
+
+            # Add sample labels only to the leftmost column
+            if j == 0:
+                ax.set_ylabel(f"Sample {i + 1}", fontsize=9)
+
+            # Highlight the first sample that corresponds to the path
+            if i == 0:
+                ax.spines['bottom'].set_color('red')
+                ax.spines['top'].set_color('red')
+                ax.spines['left'].set_color('red')
+                ax.spines['right'].set_color('red')
+                ax.spines['bottom'].set_linewidth(2)
+                ax.spines['top'].set_linewidth(2)
+                ax.spines['left'].set_linewidth(2)
+                ax.spines['right'].set_linewidth(2)
+
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+    # Add text indicating the first row corresponds to the latent path
+    plt.figtext(0.02, 0.65, "Path Tracked →", fontsize=12, color='red',
+                bbox=dict(facecolor='white', alpha=0.7, edgecolor='red'))
+
+    # ===== PART 6: Plot latent space path (bottom subplot) =====
+    ax_latent = fig.add_subplot(gs[1])
+
     # Plot each class with alpha transparency
     for i in range(10):
         mask = all_labels == i
-        alpha = 0.3 if i != target_class else 0.8  # Highlight target class
-        plt.scatter(
-            latents_2d[mask, 0], 
-            latents_2d[mask, 1], 
-            label=class_names[i], 
+        alpha = 0.3 if i != class_idx else 0.8  # Highlight target class
+        size = 20 if i != class_idx else 40  # Larger points for target class
+        ax_latent.scatter(
+            latents_2d[mask, 0],
+            latents_2d[mask, 1],
+            label=class_names[i],
             alpha=alpha,
-            s=20 if i != target_class else 40  # Larger points for target class
+            s=size
         )
-    
+
     # Plot the diffusion path
-    plt.plot(
-        path_2d[:, 0], 
-        path_2d[:, 1], 
-        'r-o', 
-        linewidth=2.5, 
-        markersize=8, 
-        label=f"Diffusion Path to {class_names[target_class]}",
+    ax_latent.plot(
+        path_2d[:, 0],
+        path_2d[:, 1],
+        'r-o',
+        linewidth=2.5,
+        markersize=8,
+        label=f"Diffusion Path",
         zorder=10  # Ensure path is drawn on top
     )
-    
+
     # Add arrows to show direction
     for i in range(len(path_2d) - 1):
-        plt.annotate(
-            "", 
-            xy=(path_2d[i+1, 0], path_2d[i+1, 1]),
+        ax_latent.annotate(
+            "",
+            xy=(path_2d[i + 1, 0], path_2d[i + 1, 1]),
             xytext=(path_2d[i, 0], path_2d[i, 1]),
             arrowprops=dict(arrowstyle="->", color="darkred", lw=1.5)
         )
-    
-    # Add markers for start and end points
-    plt.scatter(path_2d[0, 0], path_2d[0, 1], c='black', s=100, marker='x', label="Start (Noise)", zorder=11)
-    plt.scatter(path_2d[-1, 0], path_2d[-1, 1], c='green', s=100, marker='*', label="End (Generated)", zorder=11)
-    
-    # Highlight target class area
-    target_mask = all_labels == target_class
-    target_center = np.mean(latents_2d[target_mask], axis=0)
-    plt.scatter(target_center[0], target_center[1], c='green', s=300, marker='*', edgecolor='black', alpha=0.7, zorder=9)
-    plt.annotate(
-        f"TARGET: {class_names[target_class]}", 
-        xy=(target_center[0], target_center[1]),
-        xytext=(target_center[0] + 5, target_center[1] + 5),
-        fontsize=14,
-        fontweight='bold',
-        color='darkgreen',
-        bbox=dict(boxstyle="round,pad=0.5", facecolor='white', alpha=0.8)
-    )
-    
+
     # Add timestep labels along the path
-    for i, t in enumerate(timesteps + [0]):
-        plt.annotate(
+    for i, t in enumerate(timesteps):
+        ax_latent.annotate(
             f"t={t}",
             xy=(path_2d[i, 0], path_2d[i, 1]),
             xytext=(path_2d[i, 0] + 2, path_2d[i, 1] + 2),
             fontsize=8,
             color='darkred'
         )
-    
-    plt.title(f"Diffusion Path in Latent Space Toward {class_names[target_class]}", fontsize=16)
-    plt.legend(fontsize=10)
-    plt.grid(True, linestyle='--', alpha=0.7)
-    
+
+    # Add markers for start and end points
+    ax_latent.scatter(path_2d[0, 0], path_2d[0, 1], c='black', s=100, marker='x', label="Start (Noise)", zorder=11)
+    ax_latent.scatter(path_2d[-1, 0], path_2d[-1, 1], c='green', s=100, marker='*', label="End (Generated)",
+                      zorder=11)
+
+    # Highlight target class area if specified
+    if class_idx is not None:
+        target_mask = all_labels == class_idx
+        target_center = np.mean(latents_2d[target_mask], axis=0)
+        ax_latent.scatter(target_center[0], target_center[1], c='green', s=300, marker='*',
+                          edgecolor='black', alpha=0.7, zorder=9)
+        ax_latent.annotate(
+            f"TARGET: {class_names[class_idx]}",
+            xy=(target_center[0], target_center[1]),
+            xytext=(target_center[0] + 5, target_center[1] + 5),
+            fontsize=14,
+            fontweight='bold',
+            color='darkgreen',
+            bbox=dict(boxstyle="round,pad=0.5", facecolor='white', alpha=0.8)
+        )
+
+    ax_latent.set_title(f"Diffusion Path in Latent Space (Epoch {epoch})", fontsize=16)
+    ax_latent.legend(fontsize=10, loc='best')
+    ax_latent.grid(True, linestyle='--', alpha=0.7)
+
     # Add explanatory text
     plt.figtext(
-        0.5, 0.01, 
-        "This visualization shows how the diffusion model traverses the latent space, starting from random noise\n"
-        "and progressively moving toward the target class during the denoising process.",
+        0.5, 0.01,
+        "This visualization shows the denoising process (top) and the corresponding path in latent space (bottom).\n"
+        "The first row of images (highlighted in red) corresponds to the red path in the latent space plot below.",
         ha='center', fontsize=12, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8)
     )
-    
-    # Save and show plot
-    plt.tight_layout(rect=[0, 0.03, 1, 0.97])
-    plt.savefig(f"{save_dir}/diffusion_path_to_{class_names[target_class].replace('/', '-')}.png", dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"Visualization saved to {save_dir}/diffusion_path_to_{class_names[target_class].replace('/', '-')}.png")
-    
-    # Set models back to training mode
-    autoencoder.train()
-    diffusion.eps_model.train()
 
-# Visualize latent space denoising process
-def visualize_denoising_steps(autoencoder, diffusion, epoch, class_idx=None, save_dir="./results"):
-    """
-    Visualize the denoising process of a diffusion model for a specific class (optional).
-    The leftmost column in the final plot will show the most noisy sample (largest t),
-    and the rightmost column will show the fully denoised sample (t=0).
-
-    Args:
-        autoencoder: A trained autoencoder model with a 'decode' method.
-        diffusion: A diffusion model object containing:
-            - n_steps (int): the total number of diffusion steps.
-            - eps_model: the noise prediction model used in p_sample.
-            - p_sample(x, t): a function to sample from x_t to x_{t-1}.
-        epoch (int): The current training epoch (used in the plot title).
-        class_idx (int, optional): Index of the class to label the plot. If None, labeled as random samples.
-        save_dir (str): Directory to save the resulting plot.
-
-    Returns:
-        None. The function saves the visualization plot in the specified directory.
-    """
-    # Create the output directory if it does not exist
-    os.makedirs(save_dir, exist_ok=True)
-
-    # Ensure models are on the correct device
-    device = next(autoencoder.parameters()).device
-
-    # Set models to evaluation mode to disable any dropout/batchnorm effects
-    autoencoder.eval()
-    diffusion.eps_model.eval()
-
-    # Number of samples (rows) to visualize
-    n_samples = 10
-
-    # Number of columns (different timesteps) to visualize
-    steps_to_show = 10
-
-    # Calculate the step size to cover the range from t = diffusion.n_steps - 1 down to 0
-    step_size = max(1, diffusion.n_steps // steps_to_show)
-
-    # Create a list of timesteps in descending order (e.g., [999, 899, ..., 0])
-    timesteps = list(range(diffusion.n_steps - 1, -1, -step_size))
-    # Make sure we include t=0 in case it's not exactly hit by the range
-    if timesteps[-1] != 0:
-        timesteps.append(0)
-
-    # Generate random noise as the starting point (shape: [batch_size, channels, height, width])
-    x = torch.randn((n_samples, 1, 8, 8), device=device)
-
-    # This list will store the decoded (visual) samples at each chosen timestep
-    samples_per_step = []
-
-    # Perform the denoising for each selected timestep
-    for t in timesteps:
-        # Clone the initial noise for each iteration
-        current_x = x.clone()
-
-        # Denoise from the current t down to 0
-        for time_step in range(t, -1, -1):
-            current_x = diffusion.p_sample(current_x, torch.tensor([time_step], device=device))
-
-        # Decode the latent representation into an image
-        with torch.no_grad():
-            current_x_flat = current_x.view(n_samples, -1)
-            decoded = autoencoder.decode(current_x_flat)
-
-        # Store the decoded images
-        samples_per_step.append(decoded.cpu())
-
-    # Create a matplotlib figure to display all samples
-    fig, axes = plt.subplots(n_samples, len(timesteps), figsize=(len(timesteps) * 2, n_samples * 2))
-
-    # Construct the main title (include class name if available)
+    # Create safe filename
+    title = f"denoising_with_path_epoch_{epoch}"
     if class_idx is not None:
-        class_description = f"class: {class_names[class_idx]}"
-    else:
-        class_description = "random samples"
-    main_title = f"Diffusion Model Denoising Process (Epoch {epoch}, {class_description})"
-    fig.suptitle(main_title, fontsize=16, y=0.98)
-
-    # Add a descriptive subtitle
-    subtitle = ("Each row shows a different sample; columns move from high noise (left) "
-                "to final image (right) as t decreases.")
-    plt.figtext(0.5, 0.96, subtitle, ha='center', fontsize=12)
-
-    # If only one sample, reshape the axes for consistency
-    if n_samples == 1:
-        axes = axes.reshape(1, -1)
-
-    # Loop over each sample (row) and each timestep (column)
-    for i in range(n_samples):
-        for j, t in enumerate(timesteps):
-            ax = axes[i, j]
-            # Retrieve the j-th timestep's batch of samples, then pick the i-th sample
-            img = samples_per_step[j][i].squeeze().numpy()
-            ax.imshow(img, cmap='gray')
-            ax.axis('off')
-
-            # For the top row, set a descriptive title
-            if i == 0:
-                if j == 0:
-                    ax.set_title(f"Random Noise\n t={t}", fontsize=10)
-                elif j == len(timesteps) - 1:
-                    ax.set_title(f"Final Image\n t={t}", fontsize=10)
-                else:
-                    ax.set_title(f"t={t}", fontsize=9)
-
-            # Label each row on the leftmost column
-            if j == 0:
-                ax.set_ylabel(f"Sample {i+1}", fontsize=10)
-
-    # Provide a brief explanation at the bottom of the figure
-    explanation = (
-        "This visualization demonstrates how the diffusion model progressively transforms random noise into final images.\n"
-        "Starting from high noise (left, large t) and moving toward fully denoised images (right, t=0).\n"
-        "The model learns to remove noise based on training data patterns."
-    )
-    plt.figtext(0.5, 0.01, explanation, ha='center', fontsize=10,
-                bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.7))
-
-    # Adjust layout to fit titles and explanation
-    plt.tight_layout(rect=[0, 0.04, 1, 0.94])
-
-    # Create a safe filename for saving the figure
-    title = f"denoising_epoch_{epoch}"
-    if class_idx is not None:
-        # Replace any slash in class name to avoid file path issues
+        # Replace forward slash with hyphen to avoid file path issues
         safe_class_name = class_names[class_idx].replace('/', '-')
         title += f"_class_{safe_class_name}"
 
-    # Save the plot
-    plt.savefig(f"{save_dir}/{title}.png", dpi=150, bbox_inches='tight')
+    # Save the figure
+    plt.tight_layout(rect=[0, 0.03, 1, 0.97])
+    plt.savefig(f"{save_dir}/{title}.png", dpi=300, bbox_inches='tight')
     plt.close()
 
-    # Return models to training mode
+    print(f"Combined visualization saved to {save_dir}/{title}.png")
+
+    # Set models back to training mode
     autoencoder.train()
     diffusion.eps_model.train()
 
@@ -1083,18 +1037,10 @@ def train_diffusion(autoencoder, unet, num_epochs=100, lr=1e-3, visualize_every=
             # Generate samples for all classes
             generate_samples_grid(autoencoder, diffusion, epoch + 1, save_dir=save_dir)
 
-            # Visualize denoising process for random class
-            random_class = np.random.randint(0, 10)
-            visualize_denoising_steps(autoencoder, diffusion, epoch + 1,
-                                      class_idx=random_class, save_dir=save_dir)
+            # Visualize denoising process
             for target_class in range(10):  # Visualize paths to all classes
-                visualize_diffusion_path_in_latent(
-                    autoencoder,
-                    diffusion,
-                    target_class=target_class,
-                    n_steps=10,
-                    save_dir=f"{save_dir}/diffusionPath"
-                )
+                visualize_denoising_steps(autoencoder, diffusion, epoch + 1,
+                                          class_idx=target_class, save_dir=save_dir)
 
             # Save checkpoint
             torch.save(unet.state_dict(), f"{save_dir}/diffusion_model_epoch_{epoch + 1}.pt")
