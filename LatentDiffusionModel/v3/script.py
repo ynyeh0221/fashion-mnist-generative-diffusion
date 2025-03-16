@@ -1033,10 +1033,9 @@ def train_diffusion(autoencoder, unet, num_epochs=100, lr=1e-3, visualize_every=
         plt.savefig(f"{save_dir}/diffusion_loss_progress.png")
 
         # Visualize samples and denoising process
-        if (epoch + 1) % visualize_every == 0 or epoch == num_epochs - 1:
-            # Generate samples for all classes
-            generate_samples_grid(autoencoder, diffusion, epoch + 1, save_dir=save_dir)
+        generate_samples_grid(autoencoder, diffusion, epoch + 1, save_dir=save_dir)
 
+        if (epoch + 1) % visualize_every == 0 or epoch == num_epochs - 1:
             # Visualize denoising process
             for target_class in range(10):  # Visualize paths to all classes
                 visualize_denoising_steps(autoencoder, diffusion, epoch + 1,
