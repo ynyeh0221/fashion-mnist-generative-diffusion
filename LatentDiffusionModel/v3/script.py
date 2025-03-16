@@ -1,0 +1,967 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+import math
+import torch.nn.functional as F
+import os
+import numpy as np
+from tqdm.auto import tqdm
+from sklearn.manifold import TSNE
+
+# Set image size for Fashion MNIST (28x28 grayscale images)
+img_size = 28
+
+# Data preprocessing
+transform = transforms.Compose([
+    transforms.Resize((img_size, img_size)),
+    transforms.ToTensor(),  # This already scales to [0,1] range
+])
+
+# Load Fashion MNIST dataset
+batch_size = 128  # Increased for more stable gradients
+train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, transform=transform)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True)
+
+# Define class names for Fashion MNIST
+class_names = ['T-shirt/top', 'Trouser', 'Pullover', 'Dress', 'Coat',
+               'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Ankle boot']
+
+
+def euclidean_distance_loss(x, y, reduction='mean'):
+    """
+    Calculate the Euclidean distance between x and y tensors.
+
+    Args:
+        x: First tensor
+        y: Second tensor
+        reduction: 'mean', 'sum', or 'none'
+
+    Returns:
+        Euclidean distance loss
+    """
+    # Calculate squared differences
+    squared_diff = (x - y) ** 2
+
+    # Sum across all dimensions except batch
+    squared_dist = squared_diff.view(x.size(0), -1).sum(dim=1)
+
+    # Take square root to get Euclidean distance
+    euclidean_dist = torch.sqrt(squared_dist + 1e-8)  # Add small epsilon to avoid numerical instability
+
+    # Apply reduction
+    if reduction == 'mean':
+        return euclidean_dist.mean()
+    elif reduction == 'sum':
+        return euclidean_dist.sum()
+    else:  # 'none'
+        return euclidean_dist
+
+
+# Channel Attention Layer for improved feature selection
+class CALayer(nn.Module):
+    def __init__(self, channel, reduction=16, bias=False):
+        super(CALayer, self).__init__()
+        # Global average pooling: feature --> point
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        # Feature channel downscale and upscale --> channel weight
+        self.conv_du = nn.Sequential(
+            nn.Conv2d(channel, channel // reduction, 1, padding=0, bias=bias),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channel // reduction, channel, 1, padding=0, bias=bias),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        y = self.avg_pool(x)
+        y = self.conv_du(y)
+        return x * y
+
+
+# Convolutional Attention Block - building block for encoder/decoder
+class CAB(nn.Module):
+    def __init__(self, n_feat, reduction=16, bias=False):
+        super(CAB, self).__init__()
+        self.body = nn.Sequential(
+            nn.Conv2d(n_feat, n_feat, 3, padding=1, bias=bias),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(n_feat, n_feat, 3, padding=1, bias=bias),
+        )
+        self.ca = CALayer(n_feat, reduction, bias=bias)
+
+    def forward(self, x):
+        res = self.body(x)
+        res = self.ca(res)
+        return res + x  # Residual Connection
+
+
+# Encoder network with CAB blocks
+class Encoder(nn.Module):
+    def __init__(self, latent_dim=64, in_channels=1):
+        super().__init__()
+
+        # Encoder channel progression
+        self.encoder = nn.Sequential(
+            # First stage: in_channels -> 16 channels
+            nn.Conv2d(in_channels, 16, 3, stride=1, padding=1),
+            CAB(16, reduction=8),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, 16, 4, stride=2, padding=1),  # 28x28 -> 14x14
+
+            # Second stage: 16 -> 32 channels
+            nn.Conv2d(16, 32, 3, stride=1, padding=1),
+            CAB(32, reduction=8),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 32, 4, stride=2, padding=1),  # 14x14 -> 7x7
+        )
+
+        # Flatten and project to latent space
+        self.flatten = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(32 * 7 * 7, latent_dim),
+        )
+
+    def forward(self, x):
+        x = self.encoder(x)
+        return self.flatten(x)
+
+
+# Decoder network with CAB blocks
+class Decoder(nn.Module):
+    def __init__(self, latent_dim=64, out_channels=1):
+        super().__init__()
+
+        # Initial linear transformation from latent space
+        self.linear = nn.Linear(latent_dim, 32 * 7 * 7)
+
+        # Decoder channel progression
+        self.decoder = nn.Sequential(
+            # First stage: 32 -> 16 channels
+            nn.ConvTranspose2d(32, 16, 4, stride=2, padding=1),  # 7x7 -> 14x14
+            CAB(16, reduction=8),
+            nn.ReLU(inplace=True),
+
+            # Second stage: 16 -> out_channels
+            nn.ConvTranspose2d(16, out_channels, 4, stride=2, padding=1),  # 14x14 -> 28x28
+            nn.Sigmoid()  # Output activation for [0,1] range
+        )
+
+    def forward(self, z):
+        x = self.linear(z)
+        x = x.view(-1, 32, 7, 7)  # Reshape to spatial dimensions
+        return self.decoder(x)
+
+
+# Complete Autoencoder model
+class SimpleAutoencoder(nn.Module):
+    def __init__(self, latent_dim=64, in_channels=1):
+        super().__init__()
+        self.encoder = Encoder(latent_dim, in_channels)
+        self.decoder = Decoder(latent_dim, in_channels)
+        self.latent_dim = latent_dim
+
+    def encode(self, x):
+        return self.encoder(x)
+
+    def decode(self, z):
+        return self.decoder(z)
+
+    def forward(self, x):
+        z = self.encode(x)
+        return self.decode(z)
+
+
+# Swish activation function for UNet
+class Swish(nn.Module):
+    def forward(self, x):
+        return x * torch.sigmoid(x)
+
+
+# Time embedding for diffusion model
+class TimeEmbedding(nn.Module):
+    def __init__(self, n_channels=16):
+        super().__init__()
+        self.n_channels = n_channels
+        self.lin1 = nn.Linear(self.n_channels, self.n_channels)
+        self.act = Swish()
+        self.lin2 = nn.Linear(self.n_channels, self.n_channels)
+
+    def forward(self, t):
+        # Sinusoidal time embedding similar to positional encoding
+        half_dim = self.n_channels // 2
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb)
+        emb = t[:, None] * emb[None, :]
+        emb = torch.cat((emb.sin(), emb.cos()), dim=1)
+
+        # Process through MLP
+        return self.lin2(self.act(self.lin1(emb)))
+
+
+# Residual block for UNet
+class UNetResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, d_time=16, num_groups=8):
+        super().__init__()
+
+        # Feature normalization and convolution
+        self.norm1 = nn.GroupNorm(min(num_groups, in_channels), in_channels)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+
+        # Time embedding projection
+        self.time_emb = nn.Linear(d_time, out_channels)
+        self.act = Swish()
+
+        # Second convolution
+        self.norm2 = nn.GroupNorm(min(num_groups, out_channels), out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+
+        # Residual connection handling
+        self.residual = nn.Identity() if in_channels == out_channels else nn.Conv2d(in_channels, out_channels, 1)
+
+    def forward(self, x, t):
+        # First part
+        h = self.act(self.norm1(x))
+        h = self.conv1(h)
+
+        # Add time embedding
+        t_emb = self.act(self.time_emb(t))
+        h = h + t_emb.view(-1, t_emb.shape[1], 1, 1)
+
+        # Second part
+        h = self.act(self.norm2(h))
+        h = self.conv2(h)
+
+        # Residual connection
+        return h + self.residual(x)
+
+
+# Attention block for UNet
+class UNetAttentionBlock(nn.Module):
+    def __init__(self, channels, num_heads=4):
+        super().__init__()
+        self.channels = channels
+        self.num_heads = num_heads
+
+        self.norm = nn.GroupNorm(1, channels)
+        self.qkv = nn.Conv2d(channels, channels * 3, 1)
+        self.proj = nn.Conv2d(channels, channels, 1)
+
+    def forward(self, x):
+        b, c, h, w = x.shape
+        residual = x
+
+        # Normalize input
+        x = self.norm(x)
+
+        # QKV projection
+        qkv = self.qkv(x).reshape(b, 3, self.num_heads, c // self.num_heads, h * w)
+        q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2]
+
+        # Reshape for attention computation
+        q = q.permute(0, 1, 3, 2)  # [b, heads, h*w, c//heads]
+        k = k.permute(0, 1, 2, 3)  # [b, heads, c//heads, h*w]
+        v = v.permute(0, 1, 3, 2)  # [b, heads, h*w, c//heads]
+
+        # Compute attention
+        scale = (c // self.num_heads) ** -0.5
+        attn = torch.matmul(q, k) * scale
+        attn = F.softmax(attn, dim=-1)
+
+        # Apply attention
+        out = torch.matmul(attn, v)  # [b, heads, h*w, c//heads]
+        out = out.permute(0, 3, 1, 2)  # [b, c//heads, heads, h*w]
+        out = out.reshape(b, c, h, w)
+
+        # Project and add residual
+        return self.proj(out) + residual
+
+
+# Switch Sequential for handling time embeddings
+class SwitchSequential(nn.Sequential):
+    def forward(self, x, t=None):
+        for layer in self:
+            if isinstance(layer, (UNetResidualBlock, UNetAttentionBlock)):
+                x = layer(x, t)
+            else:
+                x = layer(x)
+        return x
+
+
+# UNet architecture for noise prediction
+class SimpleUNet(nn.Module):
+    def __init__(self, in_channels=1, hidden_dims=[16, 32, 64]):
+        super().__init__()
+
+        # Time embedding
+        self.time_emb = TimeEmbedding(n_channels=16)
+
+        # Downsampling path (encoder)
+        self.down_blocks = nn.ModuleList()
+
+        # Initial convolution
+        self.initial_conv = nn.Conv2d(in_channels, hidden_dims[0], 3, padding=1)
+
+        # Downsampling blocks
+        input_dim = hidden_dims[0]
+        for dim in hidden_dims[1:]:
+            self.down_blocks.append(
+                nn.ModuleList([
+                    UNetResidualBlock(input_dim, input_dim),
+                    UNetResidualBlock(input_dim, input_dim),
+                    nn.Conv2d(input_dim, dim, 4, stride=2, padding=1)  # Downsample
+                ])
+            )
+            input_dim = dim
+
+        # Middle block (bottleneck)
+        self.middle_blocks = nn.ModuleList([
+            UNetResidualBlock(hidden_dims[-1], hidden_dims[-1]),
+            UNetAttentionBlock(hidden_dims[-1]),
+            UNetResidualBlock(hidden_dims[-1], hidden_dims[-1])
+        ])
+
+        # Upsampling path (decoder)
+        self.up_blocks = nn.ModuleList()
+
+        # Upsampling blocks - FIX: Reorder modules and update channel dimensions
+        for dim in reversed(hidden_dims[:-1]):
+            self.up_blocks.append(
+                nn.ModuleList([
+                    # Use hidden_dims[-1] as input and output for upsampling
+                    nn.ConvTranspose2d(hidden_dims[-1], hidden_dims[-1], 4, stride=2, padding=1),
+                    # Handle concatenated channels from skip connection
+                    UNetResidualBlock(hidden_dims[-1] + dim, dim),
+                    UNetResidualBlock(dim, dim),
+                ])
+            )
+            hidden_dims[-1] = dim
+
+        # Final blocks - Handle concatenated input
+        self.final_block = SwitchSequential(
+            UNetResidualBlock(hidden_dims[0] * 2, hidden_dims[0]),
+            nn.Conv2d(hidden_dims[0], in_channels, 3, padding=1)
+        )
+
+    def forward(self, x, t):
+        # Time embedding
+        t_emb = self.time_emb(t)
+
+        # Initial convolution
+        x = self.initial_conv(x)
+
+        # Store skip connections
+        skip_connections = [x]
+
+        # Downsampling
+        for resblock1, resblock2, downsample in self.down_blocks:
+            x = resblock1(x, t_emb)
+            x = resblock2(x, t_emb)
+            skip_connections.append(x)
+            x = downsample(x)
+
+        # Middle blocks
+        for block in self.middle_blocks:
+            if isinstance(block, UNetAttentionBlock):
+                x = block(x)
+            else:
+                x = block(x, t_emb)
+
+        # Upsampling - FIX: Match the new module order
+        for upsample, resblock1, resblock2 in self.up_blocks:
+            x = upsample(x)  # Upsample first
+            x = torch.cat([x, skip_connections.pop()], dim=1)  # Then concatenate
+            x = resblock1(x, t_emb)  # Then process
+            x = resblock2(x, t_emb)
+
+        # Final blocks
+        x = torch.cat([x, skip_connections.pop()], dim=1)
+        x = self.final_block(x, t_emb)
+
+        return x
+
+
+# Simplified denoising diffusion model
+class SimpleDenoiseDiffusion():
+    def __init__(self, eps_model, n_steps=1000, device=None):
+        super().__init__()
+        self.eps_model = eps_model
+        self.device = device
+
+        # Linear beta schedule
+        self.beta = torch.linspace(0.0001, 0.02, n_steps).to(device)
+        self.alpha = 1 - self.beta
+        self.alpha_bar = torch.cumprod(self.alpha, dim=0)
+        self.n_steps = n_steps
+
+    def q_sample(self, x0, t, eps=None):
+        """Forward diffusion process: add noise to data"""
+        if eps is None:
+            eps = torch.randn_like(x0)
+
+        alpha_bar_t = self.alpha_bar[t].reshape(-1, 1, 1, 1)
+        return torch.sqrt(alpha_bar_t) * x0 + torch.sqrt(1 - alpha_bar_t) * eps
+
+    def p_sample(self, xt, t):
+        """Single denoising step"""
+        # Convert time to tensor format expected by model
+        if not isinstance(t, torch.Tensor):
+            t = torch.tensor([t], device=xt.device)
+
+        # Predict noise
+        eps_theta = self.eps_model(xt, t)
+
+        # Get alpha values
+        alpha_t = self.alpha[t].reshape(-1, 1, 1, 1)
+        alpha_bar_t = self.alpha_bar[t].reshape(-1, 1, 1, 1)
+
+        # Calculate mean
+        mean = (xt - (1 - alpha_t) / torch.sqrt(1 - alpha_bar_t) * eps_theta) / torch.sqrt(alpha_t)
+
+        # Add noise if not the final step
+        var = self.beta[t].reshape(-1, 1, 1, 1)
+
+        if t[0] > 0:
+            noise = torch.randn_like(xt)
+            return mean + torch.sqrt(var) * noise
+        else:
+            return mean
+
+    def sample(self, shape, device):
+        """Generate samples by denoising from pure noise"""
+        # Start from pure noise
+        x = torch.randn(shape, device=device)
+
+        # Progressively denoise
+        for t in tqdm(reversed(range(self.n_steps)), desc="Sampling"):
+            x = self.p_sample(x, t)
+
+        return x
+
+    def loss(self, x0):
+        """Calculate noise prediction loss"""
+        batch_size = x0.shape[0]
+
+        # Random timestep for each sample
+        t = torch.randint(0, self.n_steps, (batch_size,), device=x0.device, dtype=torch.long)
+
+        # Add noise
+        eps = torch.randn_like(x0)
+        xt = self.q_sample(x0, t, eps)
+
+        # Predict noise
+        eps_theta = self.eps_model(xt, t)
+
+        return euclidean_distance_loss(eps, eps_theta)
+
+
+# Visualization functions
+
+# Visualize autoencoder reconstructions
+def visualize_reconstructions(autoencoder, epoch, save_dir="./results"):
+    """Visualize original and reconstructed images at each epoch"""
+    os.makedirs(save_dir, exist_ok=True)
+    device = next(autoencoder.parameters()).device
+
+    # Get a batch of test data
+    test_loader = DataLoader(
+        datasets.FashionMNIST(root="./data", train=False, download=True, transform=transform),
+        batch_size=8, shuffle=True
+    )
+
+    test_images, test_labels = next(iter(test_loader))
+    test_images = test_images.to(device)
+
+    # Generate reconstructions
+    autoencoder.eval()
+    with torch.no_grad():
+        reconstructed = autoencoder(test_images)
+
+    # Create visualization
+    fig, axes = plt.subplots(2, 8, figsize=(16, 4))
+
+    for i in range(8):
+        # Original
+        img = test_images[i].cpu().squeeze().numpy()
+        axes[0, i].imshow(img, cmap='gray')
+        axes[0, i].set_title(f'Original: {class_names[test_labels[i]]}')
+        axes[0, i].axis('off')
+
+        # Reconstruction
+        recon_img = reconstructed[i].cpu().squeeze().numpy()
+        axes[1, i].imshow(recon_img, cmap='gray')
+        axes[1, i].set_title('Reconstruction')
+        axes[1, i].axis('off')
+
+    plt.tight_layout()
+    plt.savefig(f"{save_dir}/reconstruction_epoch_{epoch}.png")
+    plt.close()
+    autoencoder.train()
+
+
+# Visualize latent space with t-SNE
+def visualize_latent_space(autoencoder, epoch, save_dir="./results"):
+    """Visualize the latent space of the autoencoder using t-SNE"""
+    os.makedirs(save_dir, exist_ok=True)
+    device = next(autoencoder.parameters()).device
+
+    # Get test data
+    test_dataset = datasets.FashionMNIST(root="./data", train=False, download=True, transform=transform)
+    test_loader = DataLoader(test_dataset, batch_size=500, shuffle=False)  # Use a larger batch for visualization
+
+    # Extract features and labels
+    autoencoder.eval()
+    all_latents = []
+    all_labels = []
+
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images = images.to(device)
+            latents = autoencoder.encode(images)
+            all_latents.append(latents.cpu().numpy())
+            all_labels.append(labels.numpy())
+
+    # Combine batches
+    all_latents = np.vstack(all_latents)
+    all_labels = np.concatenate(all_labels)
+
+    # Use t-SNE for dimensionality reduction
+    try:
+        tsne = TSNE(n_components=2, random_state=42)
+        latents_2d = tsne.fit_transform(all_latents)
+
+        # Plot the 2D latent space
+        plt.figure(figsize=(10, 8))
+        for i in range(10):  # 10 classes
+            mask = all_labels == i
+            plt.scatter(latents_2d[mask, 0], latents_2d[mask, 1], label=class_names[i], alpha=0.6)
+
+        plt.title(f"t-SNE Visualization of Latent Space (Epoch {epoch})")
+        plt.legend()
+        plt.savefig(f"{save_dir}/latent_space_epoch_{epoch}.png")
+        plt.close()
+    except ImportError:
+        print("sklearn not installed, skipping t-SNE visualization")
+
+    autoencoder.train()
+
+
+# Visualize latent space interpolation
+def visualize_latent_interpolation(autoencoder, epoch, save_dir="./results"):
+    """Visualize interpolation between two random samples in latent space"""
+    os.makedirs(save_dir, exist_ok=True)
+    device = next(autoencoder.parameters()).device
+
+    # Get two random samples from test set
+    test_dataset = datasets.FashionMNIST(root="./data", train=False, download=True, transform=transform)
+    idx1, idx2 = np.random.randint(0, len(test_dataset), 2)
+    img1, label1 = test_dataset[idx1]
+    img2, label2 = test_dataset[idx2]
+
+    # Encode images to latent space
+    autoencoder.eval()
+    with torch.no_grad():
+        img1 = img1.unsqueeze(0).to(device)
+        img2 = img2.unsqueeze(0).to(device)
+
+        latent1 = autoencoder.encode(img1)
+        latent2 = autoencoder.encode(img2)
+
+        # Create interpolated points
+        steps = 10
+        interpolated_latents = []
+        for alpha in np.linspace(0, 1, steps):
+            interpolated_latent = alpha * latent1 + (1 - alpha) * latent2
+            interpolated_latents.append(interpolated_latent)
+
+        # Decode interpolated points
+        interpolated_images = []
+        for latent in interpolated_latents:
+            decoded = autoencoder.decode(latent)
+            interpolated_images.append(decoded)
+
+        # Visualize
+        fig, axes = plt.subplots(1, steps, figsize=(steps * 2, 3))
+        for i, img in enumerate(interpolated_images):
+            axes[i].imshow(img.cpu().squeeze().numpy(), cmap='gray')
+            axes[i].axis('off')
+
+        fig.suptitle(f"Interpolation: {class_names[label1]} → {class_names[label2]}")
+        plt.tight_layout()
+        plt.savefig(f"{save_dir}/interpolation_epoch_{epoch}.png")
+        plt.close()
+
+    autoencoder.train()
+
+
+# Visualize latent space denoising process
+def visualize_denoising_steps(autoencoder, diffusion, epoch, class_idx=None, save_dir="./results"):
+    """Visualize the denoising process for a specific class"""
+    os.makedirs(save_dir, exist_ok=True)
+    device = next(autoencoder.parameters()).device
+
+    # Set models to evaluation mode
+    autoencoder.eval()
+    diffusion.eps_model.eval()
+
+    # Sample timesteps to visualize
+    n_samples = 10
+    steps_to_show = 10
+    step_size = diffusion.n_steps // steps_to_show
+    timesteps = list(range(0, diffusion.n_steps, step_size))[::-1]
+
+    # Generate sample from pure noise
+    x = torch.randn((n_samples, 1, 8, 8), device=device)
+
+    # Store denoised samples at each timestep
+    samples_per_step = []
+
+    # Denoising process
+    for t in timesteps:
+        # Current denoised state
+        current_x = x.clone()
+
+        # Denoise from current step to t=0
+        for time_step in range(t, -1, -1):
+            current_x = diffusion.p_sample(current_x, torch.tensor([time_step], device=device))
+
+        # Decode to image
+        with torch.no_grad():
+            current_x_flat = current_x.view(n_samples, -1)
+            decoded = autoencoder.decode(current_x_flat)
+
+        # Add to samples
+        samples_per_step.append(decoded.cpu())
+
+    # Visualize the denoising process
+    fig, axes = plt.subplots(n_samples, len(timesteps), figsize=(len(timesteps) * 2, n_samples * 2))
+
+    # For single sample case
+    if n_samples == 1:
+        axes = axes.reshape(1, -1)
+
+    for i in range(n_samples):
+        for j, t in enumerate(timesteps):
+            ax = axes[i, j]
+            img = samples_per_step[j][i].squeeze().numpy()
+            ax.imshow(img, cmap='gray')
+            ax.set_title(f't={t}')
+            ax.axis('off')
+
+    plt.tight_layout()
+    title = f"denoising_epoch_{epoch}"
+    if class_idx is not None:
+        title += f"_class_{class_names[class_idx]}"
+    plt.savefig(f"{save_dir}/{title}.png")
+    plt.close()
+
+    # Set models back to training mode
+    autoencoder.train()
+    diffusion.eps_model.train()
+
+
+# Generate samples for all classes
+def generate_samples_grid(autoencoder, diffusion, epoch, n_per_class=5, save_dir="./results"):
+    """Generate a grid of samples with n_per_class samples for each Fashion MNIST class"""
+    os.makedirs(save_dir, exist_ok=True)
+    device = next(autoencoder.parameters()).device
+
+    # Set models to evaluation mode
+    autoencoder.eval()
+    diffusion.eps_model.eval()
+
+    n_classes = 10
+    fig, axes = plt.subplots(n_classes, n_per_class, figsize=(n_per_class * 2, n_classes * 2))
+
+    # Add a title to explain what the figure shows
+    fig.suptitle(f'Fashion MNIST Samples Generated by Diffusion Model (Epoch {epoch})',
+                 fontsize=16, y=0.98)
+
+    # Add a subtitle with additional explanation
+    plt.figtext(0.5, 0.94,
+                'Each row shows generated samples organized by fashion item category',
+                ha='center', fontsize=12)
+
+    for i in range(n_classes):
+        # Generate samples
+        latent_shape = (n_per_class, 1, 8, 8)
+        samples = diffusion.sample(latent_shape, device)
+
+        # Decode samples
+        with torch.no_grad():
+            samples_flat = samples.view(n_per_class, -1)
+            decoded = autoencoder.decode(samples_flat)
+
+        # Plot samples
+        for j in range(n_per_class):
+            img = decoded[j].cpu().squeeze().numpy()
+            axes[i, j].imshow(img, cmap='gray')
+
+            # Add class label to the leftmost image in each row
+            if j == 0:
+                axes[i, j].set_ylabel(class_names[i], fontsize=10, fontweight='bold')
+
+            # Remove axis ticks
+            axes[i, j].axis('off')
+
+            # Add class label above the first row
+            if i == 0:
+                axes[i, j].set_title(f'Sample {j + 1}', fontsize=9)
+
+    # Add a text box explaining the visualization
+    description = (
+        "This visualization shows fashion items generated by the diffusion model.\n"
+        "The model creates new, synthetic images based on learned patterns from Fashion MNIST.\n"
+        "Each row corresponds to a different clothing category from the dataset."
+    )
+    plt.figtext(0.5, 0.01, description, ha='center', fontsize=10,
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.7))
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.92])  # Adjust layout to make room for titles
+    plt.savefig(f"{save_dir}/samples_grid_epoch_{epoch}.png", dpi=150, bbox_inches='tight')
+    plt.close()
+
+    # Set models back to training mode
+    autoencoder.train()
+    diffusion.eps_model.train()
+
+    print(f"Generated sample grid for epoch {epoch}: Shows {n_per_class} examples of each fashion category")
+
+
+# Modified training function for the autoencoder with enhanced visualizations
+def train_autoencoder(autoencoder, num_epochs=50, lr=1e-4, visualize_every=5, save_dir="./results"):
+    print("Starting Autoencoder training...")
+    os.makedirs(save_dir, exist_ok=True)
+
+    device = next(autoencoder.parameters()).device
+    optimizer = optim.Adam(autoencoder.parameters(), lr=lr)
+
+    def criterion(x, y):
+        return euclidean_distance_loss(x, y)
+
+    # Training loop
+    loss_history = []
+
+    # Create a figure for live loss plotting
+    plt.figure(figsize=(10, 5))
+
+    for epoch in range(num_epochs):
+        epoch_loss = 0
+        autoencoder.train()
+
+        for batch_idx, (data, _) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}")):
+            data = data.to(device)
+
+            # Forward pass
+            reconstructed = autoencoder(data)
+            loss = criterion(reconstructed, data)
+
+            # Backward pass
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item()
+
+        # Calculate average loss
+        avg_loss = epoch_loss / len(train_loader)
+        loss_history.append(avg_loss)
+        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {avg_loss:.6f}")
+
+        # Visualizations
+        if (epoch + 1) % visualize_every == 0 or epoch == num_epochs - 1:
+            # Reconstruction visualization
+            visualize_reconstructions(autoencoder, epoch + 1, save_dir)
+
+            # Latent space visualization
+            visualize_latent_space(autoencoder, epoch + 1, save_dir)
+
+            # Latent space interpolation
+            visualize_latent_interpolation(autoencoder, epoch + 1, save_dir)
+
+            # Plot and save the current loss curve
+            plt.clf()
+            plt.plot(range(1, len(loss_history) + 1), loss_history, marker='o')
+            plt.title('Autoencoder Training Loss')
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.grid(True)
+            plt.savefig(f"{save_dir}/autoencoder_loss_progress.png")
+
+            # Save checkpoint
+            torch.save(autoencoder.state_dict(), f"{save_dir}/autoencoder_epoch_{epoch + 1}.pt")
+
+    plt.close()
+    return autoencoder, loss_history
+
+
+# Training function for the diffusion model
+def train_diffusion(autoencoder, unet, num_epochs=100, lr=1e-3, visualize_every=10, save_dir="./results"):
+    print("Starting Diffusion Model training...")
+    os.makedirs(save_dir, exist_ok=True)
+
+    device = next(autoencoder.parameters()).device
+    autoencoder.eval()  # Set autoencoder to evaluation mode
+
+    # Create diffusion model
+    diffusion = SimpleDenoiseDiffusion(unet, n_steps=1000, device=device)
+    optimizer = optim.Adam(unet.parameters(), lr=lr)
+
+    # Training loop
+    loss_history = []
+
+    # Create a figure for live loss plotting
+    plt.figure(figsize=(10, 5))
+
+    for epoch in range(num_epochs):
+        epoch_loss = 0
+        for batch_idx, (data, _) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}")):
+            data = data.to(device)
+
+            # Encode images to latent space
+            with torch.no_grad():
+                latents = autoencoder.encode(data)
+                # Reshape latents to spatial form [B, 1, 8, 8]
+                latents = latents.view(-1, 1, 8, 8)
+
+            # Calculate diffusion loss
+            loss = diffusion.loss(latents)
+
+            # Backward pass
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item()
+
+            if (batch_idx + 1) % 100 == 0:
+                print(f"Epoch {epoch + 1}, Batch {batch_idx + 1}, Loss: {loss.item():.6f}")
+
+        # Calculate average loss
+        avg_loss = epoch_loss / len(train_loader)
+        loss_history.append(avg_loss)
+        print(f"Epoch {epoch + 1}/{num_epochs}, Average Loss: {avg_loss:.6f}")
+
+        # Plot and save the current loss curve
+        plt.clf()
+        plt.plot(range(1, len(loss_history) + 1), loss_history, marker='o')
+        plt.title('Diffusion Model Training Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.grid(True)
+        plt.savefig(f"{save_dir}/diffusion_loss_progress.png")
+
+        # Visualize samples and denoising process
+        if (epoch + 1) % visualize_every == 0 or epoch == num_epochs - 1:
+            # Generate samples for all classes
+            generate_samples_grid(autoencoder, diffusion, epoch + 1, save_dir=save_dir)
+
+            # Visualize denoising process for random class
+            random_class = np.random.randint(0, 10)
+            visualize_denoising_steps(autoencoder, diffusion, epoch + 1,
+                                      class_idx=random_class, save_dir=save_dir)
+
+            # Save checkpoint
+            torch.save(unet.state_dict(), f"{save_dir}/diffusion_model_epoch_{epoch + 1}.pt")
+
+    plt.close()
+    return unet, diffusion, loss_history
+
+
+# Main function to run the entire pipeline
+def main():
+    # Set device
+    device = torch.device("mps" if torch.mps.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # Create results directory
+    results_dir = "./fashion_mnist_results"
+    os.makedirs(results_dir, exist_ok=True)
+
+    # Path for saved autoencoder
+    autoencoder_path = f"{results_dir}/fashion_mnist_autoencoder.pt"
+
+    # Create autoencoder
+    autoencoder = SimpleAutoencoder(latent_dim=64, in_channels=1).to(device)
+
+    # Check if trained autoencoder exists
+    if os.path.exists(autoencoder_path):
+        print(f"Loading existing autoencoder from {autoencoder_path}")
+        autoencoder.load_state_dict(torch.load(autoencoder_path, map_location=device))
+        autoencoder.eval()
+
+        # Visualize reconstructions with loaded model
+        visualize_reconstructions(autoencoder, epoch="loaded", save_dir=results_dir)
+        visualize_latent_space(autoencoder, epoch="loaded", save_dir=results_dir)
+    else:
+        print("No existing autoencoder found. Training a new one...")
+        autoencoder, ae_losses = train_autoencoder(
+            autoencoder, num_epochs=20, lr=1e-4,
+            visualize_every=1,  # Visualize every epoch
+            save_dir=results_dir
+        )
+
+        # Save autoencoder
+        torch.save(autoencoder.state_dict(), autoencoder_path)
+
+        # Plot autoencoder loss
+        plt.figure(figsize=(8, 5))
+        plt.plot(ae_losses)
+        plt.title('Autoencoder Training Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.grid(True)
+        plt.savefig(f"{results_dir}/autoencoder_loss.png")
+        plt.close()
+
+    # Path for saved diffusion model
+    diffusion_path = f"{results_dir}/fashion_mnist_diffusion.pt"
+
+    # Create UNet
+    unet = SimpleUNet(in_channels=1, hidden_dims=[16, 32, 64]).to(device)
+
+    # Check if trained diffusion model exists
+    if os.path.exists(diffusion_path):
+        print(f"Loading existing diffusion model from {diffusion_path}")
+        unet.load_state_dict(torch.load(diffusion_path, map_location=device))
+        diffusion = SimpleDenoiseDiffusion(unet, n_steps=1000, device=device)
+
+        # Visualize samples with loaded model
+        generate_samples_grid(autoencoder, diffusion, epoch="loaded", save_dir=results_dir)
+        visualize_denoising_steps(autoencoder, diffusion, epoch="loaded", save_dir=results_dir)
+    else:
+        print("No existing diffusion model found. Training a new one...")
+        unet, diffusion, diff_losses = train_diffusion(
+            autoencoder, unet, num_epochs=50, lr=1e-3,
+            visualize_every=1,  # Visualize every epoch
+            save_dir=results_dir
+        )
+
+        # Save diffusion model
+        torch.save(unet.state_dict(), diffusion_path)
+
+        # Plot diffusion loss
+        plt.figure(figsize=(8, 5))
+        plt.plot(diff_losses)
+        plt.title('Diffusion Model Training Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.grid(True)
+        plt.savefig(f"{results_dir}/diffusion_loss.png")
+        plt.close()
+
+    # Generate final visualization samples
+    print("Generating final visualizations...")
+    if 'diffusion' not in locals():
+        # Create diffusion model if not already created
+        diffusion = SimpleDenoiseDiffusion(unet, n_steps=1000, device=device)
+
+    visualize_denoising_steps(autoencoder, diffusion, epoch="final", save_dir=results_dir)
+    generate_samples_grid(autoencoder, diffusion, epoch="final", n_per_class=10, save_dir=results_dir)
+
+    print(f"All processing complete. Results saved to {results_dir}")
+
+
+if __name__ == "__main__":
+    main()
