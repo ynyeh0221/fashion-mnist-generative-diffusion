@@ -599,121 +599,117 @@ def visualize_diffusion_path_in_latent(autoencoder, diffusion, target_class, n_s
     """
     Visualize how a diffusion path progresses in the latent space t-SNE projection
     toward a specific target class.
-
-    Args:
-        autoencoder: Trained autoencoder model
-        diffusion: Trained diffusion model
-        target_class: Index of target class (0-9)
-        n_steps: Number of denoising steps to visualize
-        save_dir: Directory to save visualization
     """
     os.makedirs(save_dir, exist_ok=True)
     device = next(autoencoder.parameters()).device
-
+    
     # Set models to eval mode
     autoencoder.eval()
     diffusion.eps_model.eval()
-
+    
     # 1. Create t-SNE projection of the latent space
-    print("Generating t-SNE projection of latent space...")
+    print(f"Generating t-SNE projection of latent space...")
     test_dataset = datasets.FashionMNIST(root="./data", train=False, download=True, transform=transform)
     test_loader = DataLoader(test_dataset, batch_size=500, shuffle=False)
-
+    
     # Extract features and labels for t-SNE
     all_latents = []
     all_labels = []
-
-    with torch.no_grad():
+    
+    with torch.no_grad():  # Important: disable gradient tracking
         for images, labels in test_loader:
             images = images.to(device)
             latents = autoencoder.encode(images)
             all_latents.append(latents.cpu().numpy())
             all_labels.append(labels.numpy())
-
+    
     # Combine batches
     all_latents = np.vstack(all_latents)
     all_labels = np.concatenate(all_labels)
-
+    
     # Use t-SNE for dimensionality reduction
     print("Computing t-SNE projection...")
     tsne = TSNE(n_components=2, random_state=42)
     latents_2d = tsne.fit_transform(all_latents)
-
+    
     # 2. Generate a sample and track its diffusion path
     print(f"Generating diffusion path toward {class_names[target_class]}...")
-
+    
     # Start from pure noise
     x = torch.randn((1, 1, 8, 8), device=device)
-
+    
     # Save intermediate states during denoising
     step_size = diffusion.n_steps // n_steps
     timesteps = list(range(0, diffusion.n_steps, step_size))[::-1]
     path_latents = []
-
-    # Track denoising progress
-    for t in timesteps:
-        current_x = x.clone()
-
-        # Denoise from current step to t=0
-        for time_step in range(t, -1, -1):
-            current_x = diffusion.p_sample(current_x, torch.tensor([time_step], device=device))
-
-        # Add current state to path
-        path_latents.append(current_x.view(1, -1).cpu().numpy())
-
-    # Add final denoised state
-    path_latents.append(current_x.view(1, -1).cpu().numpy())
+    
+    # Track denoising progress - use torch.no_grad() to avoid tracking gradients
+    with torch.no_grad():
+        for t in timesteps:
+            current_x = x.clone()
+            
+            # Denoise from current step to t=0
+            for time_step in range(t, -1, -1):
+                current_x = diffusion.p_sample(current_x, torch.tensor([time_step], device=device))
+            
+            # Add current state to path, making sure to detach from computation graph
+            path_latents.append(current_x.view(1, -1).detach().cpu().numpy())
+        
+        # Add final denoised state
+        path_latents.append(current_x.view(1, -1).detach().cpu().numpy())
+    
     path_latents = np.vstack(path_latents)
-
-    # 3. Project path points to t-SNE space
+    
+    # 3. Project path points to t-SNE space using the already fitted model
+    # We need to ensure path_latents has the same dimensionality as the original latents
+    print("Projecting diffusion path onto t-SNE space...")
     path_2d = tsne.transform(path_latents)
-
+    
     # 4. Plot t-SNE with diffusion path
     plt.figure(figsize=(12, 10))
-
+    
     # Plot each class with alpha transparency
     for i in range(10):
         mask = all_labels == i
         alpha = 0.3 if i != target_class else 0.8  # Highlight target class
         plt.scatter(
-            latents_2d[mask, 0],
-            latents_2d[mask, 1],
-            label=class_names[i],
+            latents_2d[mask, 0], 
+            latents_2d[mask, 1], 
+            label=class_names[i], 
             alpha=alpha,
             s=20 if i != target_class else 40  # Larger points for target class
         )
-
+    
     # Plot the diffusion path
     plt.plot(
-        path_2d[:, 0],
-        path_2d[:, 1],
-        'r-o',
-        linewidth=2.5,
-        markersize=8,
+        path_2d[:, 0], 
+        path_2d[:, 1], 
+        'r-o', 
+        linewidth=2.5, 
+        markersize=8, 
         label=f"Diffusion Path to {class_names[target_class]}",
         zorder=10  # Ensure path is drawn on top
     )
-
+    
     # Add arrows to show direction
     for i in range(len(path_2d) - 1):
         plt.annotate(
-            "",
-            xy=(path_2d[i + 1, 0], path_2d[i + 1, 1]),
+            "", 
+            xy=(path_2d[i+1, 0], path_2d[i+1, 1]),
             xytext=(path_2d[i, 0], path_2d[i, 1]),
             arrowprops=dict(arrowstyle="->", color="darkred", lw=1.5)
         )
-
+    
     # Add markers for start and end points
     plt.scatter(path_2d[0, 0], path_2d[0, 1], c='black', s=100, marker='x', label="Start (Noise)", zorder=11)
     plt.scatter(path_2d[-1, 0], path_2d[-1, 1], c='green', s=100, marker='*', label="End (Generated)", zorder=11)
-
+    
     # Highlight target class area
     target_mask = all_labels == target_class
     target_center = np.mean(latents_2d[target_mask], axis=0)
-    plt.scatter(target_center[0], target_center[1], c='green', s=300, marker='*', edgecolor='black', alpha=0.7,
-                zorder=9)
+    plt.scatter(target_center[0], target_center[1], c='green', s=300, marker='*', edgecolor='black', alpha=0.7, zorder=9)
     plt.annotate(
-        f"Target: {class_names[target_class]}",
+        f"TARGET: {class_names[target_class]}", 
         xy=(target_center[0], target_center[1]),
         xytext=(target_center[0] + 5, target_center[1] + 5),
         fontsize=14,
@@ -721,27 +717,36 @@ def visualize_diffusion_path_in_latent(autoencoder, diffusion, target_class, n_s
         color='darkgreen',
         bbox=dict(boxstyle="round,pad=0.5", facecolor='white', alpha=0.8)
     )
-
+    
+    # Add timestep labels along the path
+    for i, t in enumerate(timesteps + [0]):
+        plt.annotate(
+            f"t={t}",
+            xy=(path_2d[i, 0], path_2d[i, 1]),
+            xytext=(path_2d[i, 0] + 2, path_2d[i, 1] + 2),
+            fontsize=8,
+            color='darkred'
+        )
+    
     plt.title(f"Diffusion Path in Latent Space Toward {class_names[target_class]}", fontsize=16)
     plt.legend(fontsize=10)
     plt.grid(True, linestyle='--', alpha=0.7)
-
+    
     # Add explanatory text
     plt.figtext(
-        0.5, 0.01,
+        0.5, 0.01, 
         "This visualization shows how the diffusion model traverses the latent space, starting from random noise\n"
         "and progressively moving toward the target class during the denoising process.",
         ha='center', fontsize=12, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8)
     )
-
+    
     # Save and show plot
     plt.tight_layout(rect=[0, 0.03, 1, 0.97])
-    plt.savefig(f"{save_dir}/diffusion_path_to_{class_names[target_class].replace('/', '-')}.png", dpi=300,
-                bbox_inches='tight')
+    plt.savefig(f"{save_dir}/diffusion_path_to_{class_names[target_class].replace('/', '-')}.png", dpi=300, bbox_inches='tight')
     plt.close()
-
+    
     print(f"Visualization saved to {save_dir}/diffusion_path_to_{class_names[target_class].replace('/', '-')}.png")
-
+    
     # Set models back to training mode
     autoencoder.train()
     diffusion.eps_model.train()
