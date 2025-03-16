@@ -71,7 +71,7 @@ class VAE(nn.Module):
 
         self.latent_dim = latent_dim
         # Control parameter for KL weight
-        self.kl_weight = 0.0001  # Very small initial KL weight
+        self.kl_weight = 0.01
 
     def encode(self, x):
         x = self.encoder(x)
@@ -540,13 +540,12 @@ def train_vae(vae, num_epochs=50, lr=0.0001):
     recon_losses = []
     kld_losses = []
 
-    # Much simpler KL annealing - linear warmup over first half of training
     def get_kl_weight(epoch, num_epochs):
         warmup_epochs = num_epochs // 2
         if epoch < warmup_epochs:
-            return 0.0001 + (0.001 - 0.0001) * (epoch / warmup_epochs)
+            return 0.01 + (0.05 - 0.01) * (epoch / warmup_epochs)
         else:
-            return 0.001  # Fixed small weight after warmup
+            return 0.05
 
     # Using MSE loss which is guaranteed to be positive
     def reconstruction_loss(recon_x, x):
@@ -779,17 +778,6 @@ def train_latent_diffusion(vae, denoiser, latent_model, num_epochs=200, num_diff
 
             # Predict noise
             predicted_noise = denoiser(noisy_z, noise_level, labels)
-
-            # Monitor predictions periodically
-            if step % 100 == 0:
-                with torch.no_grad():
-                    # Check prediction statistics
-                    pred_mean = predicted_noise.mean().item()
-                    pred_std = predicted_noise.std().item()
-                    target_mean = target_noise.mean().item()
-                    target_std = target_noise.std().item()
-                    # print(f"Pred noise: mean={pred_mean:.4f}, std={pred_std:.4f}")
-                    # print(f"Target noise: mean={target_mean:.4f}, std={target_std:.4f}")
 
             # Apply weighted loss based on noise level
             loss = hybrid_loss(predicted_noise, target_noise, noise_level)
@@ -1223,7 +1211,7 @@ def generate_latent_diffusion_samples(latent_model, epoch, num_diffusion_steps, 
     denoiser.eval()
 
     # DPM-Solver-2 sampling parameters
-    num_sampling_steps = 15  # Much fewer steps than DDIM (50)
+    num_sampling_steps = 50  # Much fewer steps than DDIM (50)
 
     with torch.no_grad():
         # Generate samples for each class
