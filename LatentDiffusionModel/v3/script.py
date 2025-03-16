@@ -652,7 +652,9 @@ def visualize_denoising_steps(autoencoder, diffusion, epoch, class_idx=None, sav
     plt.tight_layout()
     title = f"denoising_epoch_{epoch}"
     if class_idx is not None:
-        title += f"_class_{class_names[class_idx]}"
+        # Replace forward slash with hyphen to avoid file path issues
+        safe_class_name = class_names[class_idx].replace('/', '-')
+        title += f"_class_{safe_class_name}"
     plt.savefig(f"{save_dir}/{title}.png")
     plt.close()
 
