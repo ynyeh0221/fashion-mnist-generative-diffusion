@@ -1,4 +1,4 @@
-# Fashion MNIST Conditional Diffusion Model
+# Fashion MNIST Conditional Diffusion Model (V3)
 
 This project implements a class-conditional diffusion model for generating Fashion MNIST images. It combines an autoencoder to learn a compressed latent space representation with a diffusion model that can generate new images conditioned on specific fashion item classes.
 
