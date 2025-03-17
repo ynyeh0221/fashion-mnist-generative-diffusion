@@ -116,6 +116,15 @@ The visualization shows both:
 - The step-by-step denoising of the image (top)
 - The corresponding path through the latent space (bottom)
 
+#### Epoch 5
+
+| T-shirt/Top | Trouser | Pullover | Dress | Coat |
+|:-----------:|:-------:|:--------:|:-----:|:----:|
+| ![T-shirt Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/output/denoise_with_diffusion_path/denoising_path_T-shirt-top_epoch_5.png) | ![Trouser Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/output/denoise_with_diffusion_path/denoising_path_Trouser_epoch_5.png) | ![Pullover Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/output/denoise_with_diffusion_path/denoising_path_Pullover_epoch_5.png) | ![Dress Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/output/denoise_with_diffusion_path/denoising_path_Dress_epoch_5.png) | ![Coat Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/output/denoise_with_diffusion_path/denoising_path_Coat_epoch_5.png) |
+| Sandal | Shirt | Sneaker | Bag | Ankle Boot |
+| ![Sandal Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/output/denoise_with_diffusion_path/denoising_path_Sandal_epoch_5.png) | ![Shirt Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/output/denoise_with_diffusion_path/denoising_path_Shirt_epoch_5.png) | ![Sneaker Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/output/denoise_with_diffusion_path/denoising_path_Sneaker_epoch_5.png) | ![Bag Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/output/denoise_with_diffusion_path/denoising_path_Bag_epoch_5.png) | ![Ankle Boot Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/output/denoise_with_diffusion_path/denoising_path_Ankle%20boot_epoch_5.png) |
+
+
 #### Epoch 100
 
 | T-shirt/Top | Trouser | Pullover | Dress | Coat |
