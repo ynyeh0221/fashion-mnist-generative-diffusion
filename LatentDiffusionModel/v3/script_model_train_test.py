@@ -962,9 +962,9 @@ def generate_class_samples(autoencoder, diffusion, target_class, num_samples=5, 
 
 
 def create_diffusion_animation(autoencoder, diffusion, class_idx, num_frames=50, seed=42,
-                               save_path=None, temp_dir=None, fps=10, reverse=True):
+                               save_path=None, temp_dir=None, fps=10, reverse=False):
     """
-    Create a GIF animation showing the diffusion process from noise to a generated image.
+    Create a GIF animation showing the diffusion process.
 
     Args:
         autoencoder: Trained autoencoder model
@@ -975,7 +975,7 @@ def create_diffusion_animation(autoencoder, diffusion, class_idx, num_frames=50,
         save_path: Path to save the output GIF
         temp_dir: Directory to save temporary frames (will be created if None)
         fps: Frames per second in the output GIF
-        reverse: If True, show t=1000→0 (noise to image), otherwise t=0→1000 (image to noise)
+        reverse: If False (default), show t=0→1000 (image to noise), otherwise t=1000→0 (noise to image)
 
     Returns:
         Path to the created GIF file
@@ -1032,26 +1032,43 @@ def create_diffusion_animation(autoencoder, diffusion, class_idx, num_frames=50,
         # From image to noise (t=0 to t=1000)
         timesteps = sorted(timesteps)
 
-    # Generate initial noise
-    x = torch.randn((1, 1, 8, 8), device=device)
+    # For the looping effect, we'll add frames going backward too
+    if not reverse:
+        # Add timestamps going back from high to low, excluding endpoints to avoid duplicates
+        backward_timesteps = sorted(timesteps[1:-1], reverse=True)
+        timesteps = timesteps + backward_timesteps
 
     print(f"Creating diffusion animation for class '{class_names[class_idx]}'...")
     frame_paths = []
 
     with torch.no_grad():
-        for i, t in enumerate(tqdm(timesteps)):
-            # Current timestep
-            current_x = x.clone()
+        # First, generate a proper clean image at t=0 by denoising from pure noise
+        print("Generating initial clean image...")
+        # Start from pure noise
+        x = torch.randn((1, 1, 8, 8), device=device)
 
-            if reverse:
-                # Denoise from current step to t=0 with class conditioning
-                for time_step in range(t, -1, -1):
-                    current_x = diffusion.p_sample(current_x, torch.tensor([time_step], device=device), class_tensor)
-            else:
+        # Denoise completely to get clean image at t=0
+        for time_step in tqdm(range(total_steps - 1, -1, -1), desc="Denoising"):
+            x = diffusion.p_sample(x, torch.tensor([time_step], device=device), class_tensor)
+
+        # Now we have a clean, denoised image at t=0
+        clean_x = x.clone()
+
+        # Generate frames for animation
+        print("Generating animation frames...")
+        for i, t in enumerate(tqdm(timesteps)):
+            # Start with clean image
+            current_x = clean_x.clone()
+
+            if t > 0:  # Skip adding noise at t=0
                 # Apply forward diffusion up to timestep t
+                # Generate a fixed noise vector for consistency
+                torch.manual_seed(seed)  # Ensure same noise pattern
+                eps = torch.randn_like(current_x)
+
+                # Apply noise according to diffusion schedule
                 alpha_bar_t = diffusion.alpha_bar[t].reshape(-1, 1, 1, 1)
-                eps = torch.randn_like(x)
-                current_x = torch.sqrt(alpha_bar_t) * x + torch.sqrt(1 - alpha_bar_t) * eps
+                current_x = torch.sqrt(alpha_bar_t) * current_x + torch.sqrt(1 - alpha_bar_t) * eps
 
             # Decode to image
             current_x_flat = current_x.view(1, -1)
@@ -1066,13 +1083,8 @@ def create_diffusion_animation(autoencoder, diffusion, class_idx, num_frames=50,
             ax.axis('off')
 
             # Add timestep information
-            if reverse:
-                progress = ((total_steps - t) / total_steps) * 100
-                title = f'Class: {class_names[class_idx]} (t={t}, {progress:.1f}% complete)'
-            else:
-                progress = (t / total_steps) * 100
-                title = f'Class: {class_names[class_idx]} (t={t}, {progress:.1f}% noise)'
-
+            progress = (t / total_steps) * 100
+            title = f'Class: {class_names[class_idx]} (t={t}, {progress:.1f}% noise)'
             ax.set_title(title)
 
             # Save frame
@@ -1083,7 +1095,7 @@ def create_diffusion_animation(autoencoder, diffusion, class_idx, num_frames=50,
 
     # Create GIF from frames
     print(f"Creating GIF animation at {fps} fps...")
-    with imageio.get_writer(save_path, mode='I', fps=fps) as writer:
+    with imageio.get_writer(save_path, mode='I', fps=fps, loop=0) as writer:
         for frame_path in frame_paths:
             image = imageio.imread(frame_path)
             writer.append_data(image)
@@ -1101,6 +1113,7 @@ def create_diffusion_animation(autoencoder, diffusion, class_idx, num_frames=50,
 
     print(f"Animation saved to {save_path}")
     return save_path
+
 
 # Main function
 def main():
@@ -1316,7 +1329,8 @@ def main():
     print("Generating denoising visualizations for all classes...")
     denoising_paths = []
     for class_idx in range(len(class_names)):
-        path = visualize_denoising_steps(autoencoder, diffusion, class_idx, save_dir=results_dir)
+        save_path = f"{results_dir}/denoising_path_{class_names[class_idx].replace('/', '-')}_final"
+        path = visualize_denoising_steps(autoencoder, diffusion, class_idx, save_path=save_path)
         denoising_paths.append(path)
         print(f"Generated visualization for {class_names[class_idx]}")
 
