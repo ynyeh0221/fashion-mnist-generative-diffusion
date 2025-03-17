@@ -11,6 +11,7 @@ import numpy as np
 from tqdm.auto import tqdm
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
+import imageio
 
 # Set random seed for reproducibility
 torch.manual_seed(42)
@@ -959,6 +960,148 @@ def generate_class_samples(autoencoder, diffusion, target_class, num_samples=5, 
 
     return samples
 
+
+def create_diffusion_animation(autoencoder, diffusion, class_idx, num_frames=50, seed=42,
+                               save_path=None, temp_dir=None, fps=10, reverse=True):
+    """
+    Create a GIF animation showing the diffusion process from noise to a generated image.
+
+    Args:
+        autoencoder: Trained autoencoder model
+        diffusion: Trained diffusion model
+        class_idx: Target class index (0-9) or class name
+        num_frames: Number of frames to include in the animation
+        seed: Random seed for reproducibility
+        save_path: Path to save the output GIF
+        temp_dir: Directory to save temporary frames (will be created if None)
+        fps: Frames per second in the output GIF
+        reverse: If True, show t=1000→0 (noise to image), otherwise t=0→1000 (image to noise)
+
+    Returns:
+        Path to the created GIF file
+    """
+    device = next(autoencoder.parameters()).device
+
+    # Set models to evaluation mode
+    autoencoder.eval()
+    diffusion.eps_model.eval()
+
+    # Convert class name to index if string is provided
+    class_names = ['T-shirt/top', 'Trouser', 'Pullover', 'Dress', 'Coat',
+                   'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Ankle boot']
+    if isinstance(class_idx, str):
+        if class_idx in class_names:
+            class_idx = class_names.index(class_idx)
+        else:
+            raise ValueError(f"Invalid class name: {class_idx}. Must be one of {class_names}")
+
+    # Create temp directory if needed
+    if temp_dir is None:
+        temp_dir = os.path.join('./temp_frames', f'class_{class_idx}_{seed}')
+    os.makedirs(temp_dir, exist_ok=True)
+
+    # Default save path if none provided
+    if save_path is None:
+        save_dir = './results'
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, f'diffusion_animation_{class_names[class_idx].replace("/", "-")}.gif')
+
+    # Set random seed
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    # Create class conditioning tensor
+    class_tensor = torch.tensor([class_idx], device=device)
+
+    # Calculate timesteps to sample
+    total_steps = diffusion.n_steps
+    if num_frames >= total_steps:
+        timesteps = list(range(total_steps))
+    else:
+        # Select evenly spaced timesteps
+        step_size = total_steps // num_frames
+        timesteps = list(range(0, total_steps, step_size))
+        if timesteps[-1] != total_steps - 1:
+            timesteps.append(total_steps - 1)
+
+    # Sort timesteps for proper diffusion order
+    if reverse:
+        # From noise to image (t=1000 to t=0)
+        timesteps = sorted(timesteps, reverse=True)
+    else:
+        # From image to noise (t=0 to t=1000)
+        timesteps = sorted(timesteps)
+
+    # Generate initial noise
+    x = torch.randn((1, 1, 8, 8), device=device)
+
+    print(f"Creating diffusion animation for class '{class_names[class_idx]}'...")
+    frame_paths = []
+
+    with torch.no_grad():
+        for i, t in enumerate(tqdm(timesteps)):
+            # Current timestep
+            current_x = x.clone()
+
+            if reverse:
+                # Denoise from current step to t=0 with class conditioning
+                for time_step in range(t, -1, -1):
+                    current_x = diffusion.p_sample(current_x, torch.tensor([time_step], device=device), class_tensor)
+            else:
+                # Apply forward diffusion up to timestep t
+                alpha_bar_t = diffusion.alpha_bar[t].reshape(-1, 1, 1, 1)
+                eps = torch.randn_like(x)
+                current_x = torch.sqrt(alpha_bar_t) * x + torch.sqrt(1 - alpha_bar_t) * eps
+
+            # Decode to image
+            current_x_flat = current_x.view(1, -1)
+            decoded = autoencoder.decode(current_x_flat)
+
+            # Convert to numpy for saving
+            img = decoded[0].cpu().squeeze().numpy()
+
+            # Create and save frame
+            fig, ax = plt.subplots(figsize=(5, 5))
+            ax.imshow(img, cmap='gray')
+            ax.axis('off')
+
+            # Add timestep information
+            if reverse:
+                progress = ((total_steps - t) / total_steps) * 100
+                title = f'Class: {class_names[class_idx]} (t={t}, {progress:.1f}% complete)'
+            else:
+                progress = (t / total_steps) * 100
+                title = f'Class: {class_names[class_idx]} (t={t}, {progress:.1f}% noise)'
+
+            ax.set_title(title)
+
+            # Save frame
+            frame_path = os.path.join(temp_dir, f'frame_{i:04d}.png')
+            plt.savefig(frame_path, bbox_inches='tight')
+            plt.close(fig)
+            frame_paths.append(frame_path)
+
+    # Create GIF from frames
+    print(f"Creating GIF animation at {fps} fps...")
+    with imageio.get_writer(save_path, mode='I', fps=fps) as writer:
+        for frame_path in frame_paths:
+            image = imageio.imread(frame_path)
+            writer.append_data(image)
+
+    # Clean up temporary frames
+    print("Cleaning up temporary files...")
+    for frame_path in frame_paths:
+        os.remove(frame_path)
+
+    # Try to remove the temp directory (if empty)
+    try:
+        os.rmdir(temp_dir)
+    except OSError:
+        pass  # Directory not empty or other error
+
+    print(f"Animation saved to {save_path}")
+    return save_path
+
 # Main function
 def main():
     """Main function to run the entire pipeline non-interactively"""
@@ -1128,7 +1271,9 @@ def main():
                 if (epoch + 1) % visualize_every == 0 or epoch == num_epochs - 1:
                     # Generate samples for a couple of classes
                     for class_idx in range(10):
-                        save_path = f"{save_dir}/class_{class_names[class_idx].replace('/', '-')}_epoch_{epoch + 1}.png"
+                        create_diffusion_animation(autoencoder, diffusion, class_idx=class_idx, num_frames=50,
+                                                   save_path=f"{save_dir}/diffusion_animation_class_{class_names[class_idx].replace('/', '-')}_epoch_{epoch + 1}.gif")
+                        save_path = f"{save_dir}/sample_class_{class_names[class_idx].replace('/', '-')}_epoch_{epoch + 1}.png"
                         generate_class_samples(autoencoder, diffusion, target_class=class_idx, num_samples=5, save_path=save_path)
                         save_path = f"{save_dir}/denoising_path_{class_names[class_idx].replace('/', '-')}_epoch_{epoch + 1}.png"
                         visualize_denoising_steps(autoencoder, diffusion, class_idx=class_idx, save_path=save_path)
@@ -1141,7 +1286,7 @@ def main():
         # Train conditional diffusion model
         conditional_unet, diffusion, diff_losses = train_conditional_diffusion(
             autoencoder, conditional_unet, num_epochs=100, lr=1e-3,
-            visualize_every=1,  # Visualize every 10 epochs
+            visualize_every=5,  # Visualize every 5 epochs
             save_dir=results_dir
         )
 
