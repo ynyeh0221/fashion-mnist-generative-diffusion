@@ -92,7 +92,7 @@ Animations showing the diffusion process from clean image to noise and back, for
 
 | T-shirt/Top | Trouser | Pullover | Dress | Coat |
 |:-----------:|:-------:|:--------:|:-----:|:----:|
-| ![T-shirt Animation](./fashion_mnist_conditional/diffusion_animation_T-shirt-top.gif) | ![Trouser Animation](./fashion_mnist_conditional/diffusion_animation_Trouser.gif) | ![Pullover Animation](./fashion_mnist_conditional/diffusion_animation_Pullover.gif) | ![Dress Animation](./fashion_mnist_conditional/diffusion_animation_Dress.gif) | ![Coat Animation](./fashion_mnist_conditional/diffusion_animation_Coat.gif) |
+| ![T-shirt Animation](./fashion_mnist_conditional/diffusion_animation_T-shirt-top.gif) | ![Trouser Animation](./fashion_mnist_conditional/diffusion_animation_Trouser.gif) | ![Pullover Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Pullover_epoch_5.gif) | ![Dress Animation](./fashion_mnist_conditional/diffusion_animation_Dress.gif) | ![Coat Animation](./fashion_mnist_conditional/diffusion_animation_Coat.gif) |
 | Sandal | Shirt | Sneaker | Bag | Ankle Boot |
 | ![Sandal Animation](./fashion_mnist_conditional/diffusion_animation_Sandal.gif) | ![Shirt Animation](./fashion_mnist_conditional/diffusion_animation_Shirt.gif) | ![Sneaker Animation](./fashion_mnist_conditional/diffusion_animation_Sneaker.gif) | ![Bag Animation](./fashion_mnist_conditional/diffusion_animation_Bag.gif) | ![Ankle Boot Animation](./fashion_mnist_conditional/diffusion_animation_Ankle-boot.gif) |
 
