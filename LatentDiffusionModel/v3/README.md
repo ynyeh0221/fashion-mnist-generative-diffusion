@@ -1,0 +1,118 @@
+# Fashion MNIST Conditional Diffusion Model
+
+This project implements a class-conditional diffusion model for generating Fashion MNIST images. It combines an autoencoder to learn a compressed latent space representation with a diffusion model that can generate new images conditioned on specific fashion item classes.
+
+## Overview
+
+The architecture consists of two main components:
+
+1. **Autoencoder** - Compresses the Fashion MNIST images into a latent space, enabling more efficient diffusion modeling.
+2. **Conditional Diffusion Model** - Generates new fashion items by progressively denoising random noise, guided by class conditioning.
+
+## Features
+
+- **Class-conditional image generation** - Generate specific clothing items like t-shirts, dresses, or shoes
+- **Attention mechanisms** - Enhanced feature selection using Channel Attention Layers (CAL)
+- **Visualization tools** - Extensive visualization of the latent space, generation process, and class distributions
+- **Progressive denoising** - Step-by-step visualization of how images form during the diffusion process
+
+## Model Architecture
+
+### Autoencoder
+- **Encoder**: Convolutional layers with attention modules to compress images to a 64-dimensional latent space
+- **Decoder**: Transposed convolutions to reconstruct images from the latent representation
+
+### Diffusion Model
+- **UNet backbone** with residual connections
+- **Time embedding** using sinusoidal positional encoding
+- **Class embedding** layer for conditioning on specific fashion categories
+- **Self-attention mechanisms** in the bottleneck for global feature correlation
+
+## Requirements
+
+- Python 3.6+
+- PyTorch
+- torchvision
+- matplotlib
+- numpy
+- tqdm
+- scikit-learn
+
+## Usage
+
+### Training
+
+```python
+# Main training function
+python main.py
+```
+
+The training process includes:
+1. First training the autoencoder to compress Fashion MNIST images
+2. Then training the conditional diffusion model on the learned latent space
+
+### Generating Images
+
+```python
+# Generate samples for a specific class
+samples = generate_class_samples(
+    autoencoder, 
+    diffusion, 
+    target_class="Dress",  # or class index (3)
+    num_samples=5,
+    save_path="generated_dresses.png"
+)
+```
+
+### Visualizations
+
+The model provides several visualization functions:
+
+```python
+# Visualize the entire generation process for a specific class
+visualize_denoising_steps(
+    autoencoder,
+    diffusion,
+    class_idx=5,  # 5 corresponds to "Sandal"
+    save_path="sandal_generation_process.png"
+)
+
+# Generate a grid of samples for all classes
+generate_samples_grid(
+    autoencoder, 
+    diffusion, 
+    n_per_class=5,
+    save_dir="./results"
+)
+```
+
+## Example Outputs
+
+### Denoising Process Visualization
+![Denoising Process](./fashion_mnist_conditional/denoising_path_Dress.png)
+
+The visualization shows both:
+- The step-by-step denoising of the image (top)
+- The corresponding path through the latent space (bottom)
+
+## Model Components
+
+### SimpleAutoencoder
+- Compresses images into a latent representation and reconstructs them
+- Uses Channel Attention Layers for improved feature selection
+
+### ConditionalUNet
+- Predicts noise at each diffusion step
+- Incorporates class conditioning to guide the generation process
+- Uses time embedding to handle different diffusion timesteps
+
+### ConditionalDenoiseDiffusion
+- Manages the forward and reverse diffusion processes
+- Handles class conditioning during sample generation
+
+## Results
+
+The model successfully learns to generate diverse, high-quality fashion items for each class, demonstrating:
+- Good class separation in the latent space
+- Consistent generation of class-specific features
+- Smooth transitions during the denoising process
