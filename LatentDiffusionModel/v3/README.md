@@ -86,6 +86,18 @@ generate_samples_grid(
 )
 ```
 
+### Diffusion Animation Gallery
+
+Animations showing the diffusion process from clean image to noise and back, for various Fashion MNIST classes:
+
+| T-shirt/Top | Trouser | Pullover | Dress | Coat |
+|:-----------:|:-------:|:--------:|:-----:|:----:|
+| ![T-shirt Animation](./fashion_mnist_conditional/diffusion_animation_T-shirt-top.gif) | ![Trouser Animation](./fashion_mnist_conditional/diffusion_animation_Trouser.gif) | ![Pullover Animation](./fashion_mnist_conditional/diffusion_animation_Pullover.gif) | ![Dress Animation](./fashion_mnist_conditional/diffusion_animation_Dress.gif) | ![Coat Animation](./fashion_mnist_conditional/diffusion_animation_Coat.gif) |
+| Sandal | Shirt | Sneaker | Bag | Ankle Boot |
+| ![Sandal Animation](./fashion_mnist_conditional/diffusion_animation_Sandal.gif) | ![Shirt Animation](./fashion_mnist_conditional/diffusion_animation_Shirt.gif) | ![Sneaker Animation](./fashion_mnist_conditional/diffusion_animation_Sneaker.gif) | ![Bag Animation](./fashion_mnist_conditional/diffusion_animation_Bag.gif) | ![Ankle Boot Animation](./fashion_mnist_conditional/diffusion_animation_Ankle-boot.gif) |
+
+Each animation shows the bidirectional diffusion process - starting with a clean generated image (t=0), progressing to random noise (t=1000), and then reversing back to the clean image in a continuous loop.
+
 ## Example Outputs
 
 ### Denoising Process Visualization
