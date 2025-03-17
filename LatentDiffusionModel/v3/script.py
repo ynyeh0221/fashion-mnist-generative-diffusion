@@ -1127,7 +1127,7 @@ def main():
                 # Visualize samples periodically
                 if (epoch + 1) % visualize_every == 0 or epoch == num_epochs - 1:
                     # Generate samples for a couple of classes
-                    for class_idx in [0, 5]:  # Just visualize two classes during training
+                    for class_idx in [0, 3, 6, 9]:  # Just visualize four classes during training
                         save_path = f"{save_dir}/class_{class_names[class_idx].replace('/', '-')}_epoch_{epoch + 1}.png"
                         generate_class_samples(autoencoder, diffusion, target_class=class_idx, num_samples=5, save_path=save_path)
                         save_path = f"{save_dir}/denoising_path_{class_names[class_idx].replace('/', '-')}_epoch_{epoch + 1}.png"
