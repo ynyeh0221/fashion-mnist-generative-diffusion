@@ -1130,7 +1130,7 @@ def main():
                     for class_idx in [0, 5]:  # Just visualize two classes during training
                         save_path = f"{save_dir}/class_{class_names[class_idx].replace('/', '-')}_epoch_{epoch + 1}.png"
                         generate_class_samples(autoencoder, diffusion, target_class=class_idx, num_samples=5, save_path=save_path)
-                        save_path = f"{save_dir}/denoising_path_{class_names[class_idx].replace('/', '-')}_epoch_{epoch}.png"
+                        save_path = f"{save_dir}/denoising_path_{class_names[class_idx].replace('/', '-')}_epoch_{epoch + 1}.png"
                         visualize_denoising_steps(autoencoder, diffusion, class_idx=class_idx, save_path=save_path)
 
                     # Save checkpoint
