@@ -89,7 +89,6 @@ generate_samples_grid(
 ## Example Outputs
 
 ### Denoising Process Visualization
-![Denoising Process](./fashion_mnist_conditional/denoising_path_Dress.png)
 
 The visualization shows both:
 - The step-by-step denoising of the image (top)
