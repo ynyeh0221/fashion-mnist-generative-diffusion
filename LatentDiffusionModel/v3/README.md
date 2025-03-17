@@ -90,11 +90,21 @@ generate_samples_grid(
 
 Animations showing the diffusion process from clean image to noise and back, for various Fashion MNIST classes:
 
+#### Epoch 5
+
 | T-shirt/Top | Trouser | Pullover | Dress | Coat |
 |:-----------:|:-------:|:--------:|:-----:|:----:|
 | ![T-shirt Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_T-shirt-top_epoch_5.gif) | ![Trouser Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Trouser_epoch_5.gif) | ![Pullover Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Pullover_epoch_5.gif) | ![Dress Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Dress_epoch_5.gif) | ![Coat Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Coat_epoch_5.gif) |
 | Sandal | Shirt | Sneaker | Bag | Ankle Boot |
 | ![Sandal Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Sandal_epoch_5.gif) | ![Shirt Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Shirt_epoch_5.gif) | ![Sneaker Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Sneaker_epoch_5.gif) | ![Bag Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Bag_epoch_5.gif) | ![Ankle Boot Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Ankle%20boot_epoch_5.gif) |
+
+#### Epoch 100
+
+| T-shirt/Top | Trouser | Pullover | Dress | Coat |
+|:-----------:|:-------:|:--------:|:-----:|:----:|
+| ![T-shirt Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_T-shirt-top_epoch_100.gif) | ![Trouser Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Trouser_epoch_100.gif) | ![Pullover Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Pullover_epoch_100.gif) | ![Dress Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Dress_epoch_100.gif) | ![Coat Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Coat_epoch_100.gif) |
+| Sandal | Shirt | Sneaker | Bag | Ankle Boot |
+| ![Sandal Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Sandal_epoch_100.gif) | ![Shirt Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Shirt_epoch_100.gif) | ![Sneaker Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Sneaker_epoch_100.gif) | ![Bag Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Bag_epoch_100.gif) | ![Ankle Boot Animation](https://github.com/ynyeh0221/fashion-mnist-generative-diffusion/blob/main/LatentDiffusionModel/v3/diffusion_animation_class_Ankle%20boot_epoch_100.gif) |
 
 Each animation shows the bidirectional diffusion process - starting with a clean generated image (t=0), progressing to random noise (t=1000), and then reversing back to the clean image in a continuous loop.
 
