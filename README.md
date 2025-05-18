@@ -1,7 +1,7 @@
 # fashion-mnist-generative-diffusion
 A PyTorch implementation of a (latent/image) diffusion model for generating Fashion-MNIST-like digit images. The repository demonstrates both unconditional and conditional image generation, clearly showing how diffusion models remove noise step-by-step to generate digits from random noise or from a numeric prompt.
 
-[DEEPWIKI](https://deepwiki.com/ynyeh0221/fashion-mnist-generative-diffusion)
+[DEEPWIKI](https://deepwiki.com/ynyeh0221/fashion-mnist-generative-diffusion)[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ynyeh0221/fashion-mnist-generative-diffusion)
 
 ## Example Outputs
 
