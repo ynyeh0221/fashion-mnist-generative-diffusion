@@ -16,16 +16,15 @@ pip install torch torchvision matplotlib numpy tqdm scikit-learn
 Python 3.8 or later and a CUDA-capable GPU are recommended for training but are not strictly required.
 
 ## Quick start
-To train the latest latent diffusion model:
+To train the latest latent diffusion model and generate example outputs:
 ```bash
 cd LatentDiffusionModel/v3
-python script_model_train_test.py --train
+python script_model_train_test.py
 ```
-After training, generate samples from a saved checkpoint:
-```bash
-python script_model_train_test.py --generate --model-path <checkpoint>
-```
-See the README inside each subdirectory for additional options and explanations.
+The script will automatically train the autoencoder and diffusion model if
+no checkpoints are found and then produce a set of sample visualisations.
+See the README inside each subdirectory for additional options and
+explanations.
 
 ## Dataset
 The models use the [Fashion-MNIST](https://github.com/zalandoresearch/fashion-mnist) dataset of 28×28 grayscale clothing images.  The dataset will be downloaded automatically by the provided scripts if it is not already present on your system.

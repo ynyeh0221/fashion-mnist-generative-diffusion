@@ -1,0 +1,24 @@
+# Ignore Python cache and logs
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Virtual environment directories
+venv/
+.env/
+
+# Dataset downloads
+/data/
+
+# Training outputs
+*/output/
+*.pt
+*.png
+*.gif
+
+# OS files
+.DS_Store
