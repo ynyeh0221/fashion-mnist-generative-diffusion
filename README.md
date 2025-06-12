@@ -1,5 +1,7 @@
 # Fashion-MNIST Generative Diffusion
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ynyeh0221/fashion-mnist-generative-diffusion)
+
 This repository collects several PyTorch experiments on diffusion models trained on the Fashion-MNIST dataset.  Implementations range from image-space diffusion with CNNs and Transformers to a latent diffusion approach that combines an autoencoder with a conditional UNet.  Both unconditional and class-conditional generation are demonstrated.
 
 ## Repository structure
