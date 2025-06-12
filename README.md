@@ -5,8 +5,8 @@
 This repository collects several PyTorch experiments on diffusion models trained on the Fashion-MNIST dataset.  Implementations range from image-space diffusion with CNNs and Transformers to a latent diffusion approach that combines an autoencoder with a conditional UNet.  Both unconditional and class-conditional generation are demonstrated.
 
 ## Repository structure
-- **ImageDiffusionModel/** – early experiments including CNN, Transformer and UNet based denoisers.
-- **LatentDiffusionModel/** – latent diffusion models that operate in a learned latent space.  The `v3` directory contains the most feature complete version.
+- **ImageDiffusionModel** – early experiments including CNN, Transformer and UNet based denoisers.
+- **LatentDiffusionModel** – latent diffusion models that operate in a learned latent space.  The `v3` directory contains the most feature complete version.
 
 Each subfolder contains its own training script and README describing the model and usage in more detail.
 
